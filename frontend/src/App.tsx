@@ -12,6 +12,7 @@ import { ValidationErrors } from "@/components/anomaly/ValidationErrors"
 import { AIAnalysisSummary } from "@/components/ai/AIAnalysisSummary"
 import { LLMInsightsPanel } from "@/components/insights/LLMInsightsPanel"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { AnalysisStepper } from "@/components/upload/AnalysisStepper"
 import { analyzeTransactions, ValidationFailureError } from "@/lib/api"
 import type { AnalysisResponse } from "@/types/api"
 
@@ -23,16 +24,33 @@ function App() {
   const [recommendation, setRecommendation] = useState<string | null>(null)
   const [data, setData] = useState<AnalysisResponse | null>(null)
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+  const [analysisStep, setAnalysisStep] = useState(0)
 
   const handleFileSelect = useCallback(async (file: File) => {
     setIsLoading(true)
     setError(null)
+    setActiveSection("analyzing")
+    setAnalysisStep(1) // Move to "Quality Check" step (0-indexed logic in stepper might need adjustment, assume 0=step1, 1=step2)
 
     try {
-      const result = await analyzeTransactions(file)
+      // Start the analysis
+      const resultPromise = analyzeTransactions(file)
+
+      // Artificial delay to show the "Analysis" step smoothly if the API is too fast, 
+      // or just to give user context. 
+      // In a real app we might get progress updates. 
+      // For now, let's just wait for the promise.
+      const result = await resultPromise
+
+      setAnalysisStep(2) // Move to "Finalizing"
+
+      // Short delay to let user see "Finalizing" state
+      await new Promise(resolve => setTimeout(resolve, 800))
+
       setData(result)
       setActiveSection("overview")
     } catch (err) {
+      setActiveSection("upload") // Go back to upload on error
       if (err instanceof ValidationFailureError) {
         setError(err.message)
         setValidationErrors(err.failures)
@@ -171,6 +189,13 @@ function App() {
         return (
           <div className="space-y-6 animate-fade-in">
             <LLMInsightsPanel insights={data.eda_analysis.data_quality_dimensions.llm_insights} />
+          </div>
+        )
+
+      case "analyzing":
+        return (
+          <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in zoom-in-95 duration-500">
+            <AnalysisStepper currentStep={analysisStep} />
           </div>
         )
 
