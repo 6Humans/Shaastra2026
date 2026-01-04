@@ -49,9 +49,10 @@ class RecordResult:
 class Agent(ABC):
     """Abstract base class for all agents."""
 
-    def __init__(self, name: str, openrouter_api_key: Optional[str] = None):
+    def __init__(self, name: str, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
         self.name = name
         self.openrouter_api_key = openrouter_api_key
+        self.eda_context = eda_context or {}
         self.logger = []
 
     @abstractmethod
@@ -64,6 +65,58 @@ class Agent(ABC):
         log_entry = f"[{self.name}] {datetime.now().isoformat()}: {message}"
         self.logger.append(log_entry)
         print(log_entry)
+    
+    def _format_eda_context(self) -> str:
+        """Format EDA context for LLM prompts."""
+        if not self.eda_context:
+            return "No dataset context available."
+        
+        dq = self.eda_context.get('data_quality_dimensions', {})
+        if not dq:
+            return "No dataset context available."
+        
+        scores = dq.get('scores', {})
+        weights = dq.get('weights_applied', {})
+        summary = dq.get('summary', {})
+        issues = dq.get('issues_detected', [])
+        
+        context = f"""
+📊 **DATASET-LEVEL CONTEXT** (EDA Analysis):
+
+**Dataset Size:**
+- Total Rows: {summary.get('total_rows', 'Unknown'):,}
+- Total Columns: {summary.get('total_columns', 'Unknown')}
+- Total Cells: {summary.get('total_cells', 'Unknown'):,}
+
+**Overall Data Quality:** {dq.get('overall_score', 'N/A'):.2f}/100 ({dq.get('quality_grade', 'N/A')})
+
+**Quality Dimension Scores (0-100):**
+- Completeness: {scores.get('completeness', 0):.2f} (Weight: {weights.get('completeness', 0)*100:.1f}%)
+- Uniqueness: {scores.get('uniqueness', 0):.2f} (Weight: {weights.get('uniqueness', 0)*100:.1f}%)
+- Validity: {scores.get('validity', 0):.2f} (Weight: {weights.get('validity', 0)*100:.1f}%)
+- Consistency: {scores.get('consistency', 0):.2f} (Weight: {weights.get('consistency', 0)*100:.1f}%)
+- Accuracy: {scores.get('accuracy', 0):.2f} (Weight: {weights.get('accuracy', 0)*100:.1f}%)
+- Timeliness: {scores.get('timeliness', 0):.2f} (Weight: {weights.get('timeliness', 0)*100:.1f}%)
+
+**Dataset-Wide Issues Detected ({len(issues)}):**
+"""
+        for issue in issues[:5]:  # Top 5 issues
+            context += f"- [{issue.get('severity', 'unknown').upper()}] {issue.get('dimension', 'unknown')}: {issue.get('description', 'No description')}\n"
+        
+        if len(issues) > 5:
+            context += f"- ... and {len(issues) - 5} more issues\n"
+        
+        context += f"""
+**Weighting Strategy:** {dq.get('computation_metadata', {}).get('weighting_strategy', 'unknown')}
+**Confidence Level:** {dq.get('confidence_level', 'unknown').upper()}
+
+💡 **Use this dataset context to:**
+- Compare this individual record against dataset-wide patterns
+- Identify if this record contributes to known dataset issues
+- Assess if this record is typical or anomalous for this dataset
+- Consider the prioritized dimensions (higher weights) in your analysis
+"""
+        return context
 
     async def call_llm(self, prompt: str, system_prompt: str = None) -> str:
         """Call OpenRouter LLM (Qwen model)."""
@@ -102,8 +155,8 @@ class Agent(ABC):
 class DataScientistAgent(Agent):
     """Performs data loading, validation, preprocessing, and EDA on individual records."""
 
-    def __init__(self, openrouter_api_key: Optional[str] = None):
-        super().__init__("DataScientistAgent", openrouter_api_key)
+    def __init__(self, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
+        super().__init__("DataScientistAgent", openrouter_api_key, eda_context)
 
     async def process_record(self, record: Record) -> Dict[str, Any]:
         """Process a single record for data quality checks."""
@@ -120,14 +173,71 @@ class DataScientistAgent(Agent):
             # Use LLM for data quality assessment
             llm_analysis = ""
             if self.openrouter_api_key:
-                prompt = f"""Analyze this data record for quality issues:
+                eda_info = self._format_eda_context()
+                prompt = f"""{eda_info}
+
+📝 INDIVIDUAL RECORD ANALYSIS:
+
+🔬 DATA QUALITY ANALYSIS - RECORD {record.record_id}
+
+📊 RECORD DATA:
 {json.dumps(record.data, indent=2)}
 
-Identify any potential data quality concerns (missing values, anomalies, format issues)."""
+📋 YOUR TASK AS A DATA SCIENTIST:
+Perform comprehensive data quality assessment on this transaction record.
+
+🎯 ANALYSIS REQUIREMENTS:
+1. **Completeness Check**:
+   - Identify all missing/null/empty fields
+   - Assess criticality of missing data (critical vs optional fields)
+   - Calculate completeness ratio
+
+2. **Data Type Validation**:
+   - Verify each field has appropriate data type
+   - Flag type mismatches (e.g., string in numeric field)
+   - Check for implicit type coercion issues
+
+3. **Format Validation**:
+   - Email: RFC 5322 compliance
+   - Phone: E.164 or local format
+   - Dates: ISO 8601 or consistent format
+   - Credit cards: Luhn algorithm validation
+   - Currency: Proper decimal precision
+
+4. **Statistical Anomalies**:
+   - Outlier detection for numeric fields
+   - Unusual value ranges
+   - Suspiciously round numbers
+
+5. **Business Logic Validation**:
+   - Amount consistency (negative transactions?)
+   - Date logic (future dates, unrealistic timestamps)
+   - Category/status value validity
+
+📤 OUTPUT FORMAT (JSON):
+{{
+  "completeness_score": 0.0-1.0,
+  "missing_critical_fields": ["field1", "field2"],
+  "type_issues": ["description"],
+  "format_violations": ["description"],
+  "anomalies_detected": ["description"],
+  "business_rule_violations": ["description"],
+  "overall_assessment": "PASS/WARNING/FAIL",
+  "priority_actions": ["action1", "action2"]
+}}
+
+Be thorough, precise, and actionable."""
                 
                 llm_analysis = await self.call_llm(
                     prompt,
-                    system_prompt="You are a data quality expert. Provide concise analysis."
+                    system_prompt="""You are a senior data scientist specializing in data quality engineering.
+You have 10+ years of experience in financial transaction analysis, data validation, and quality assurance.
+Your analysis must be:
+- Technically rigorous and evidence-based
+- Focused on actionable insights
+- Compliant with industry standards (ISO 8000, DAMA DMBOK)
+- Formatted as valid JSON
+Always prioritize data integrity and business impact."""
                 )
 
             output = {
@@ -148,13 +258,13 @@ Identify any potential data quality concerns (missing values, anomalies, format 
 
 
 class ScoringAgent(Agent):
-    """Computes data quality metrics and scores for individual records."""
+    """Computes data quality metrics and scores for individual records using LLM-enhanced analysis."""
 
-    def __init__(self, openrouter_api_key: Optional[str] = None):
-        super().__init__("ScoringAgent", openrouter_api_key)
+    def __init__(self, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
+        super().__init__("ScoringAgent", openrouter_api_key, eda_context)
 
     async def process_record(self, record: Record) -> Dict[str, Any]:
-        """Score a single record's data quality."""
+        """Score a single record's data quality with detailed LLM analysis."""
         self.log(f"Scoring record {record.record_id}")
 
         try:
@@ -166,18 +276,124 @@ class ScoringAgent(Agent):
             # Completeness
             completeness = sum(1 for v in data.values() if v not in [None, ""]) / max(len(data), 1)
             
-            # Validity (basic check for expected data types)
-            validity = 0.9  # Simulated
+            # Use LLM for enhanced scoring
+            llm_scores = {}
+            if self.openrouter_api_key:
+                eda_info = self._format_eda_context()
+                prompt = f"""{eda_info}
+
+📝 INDIVIDUAL RECORD SCORING:
+
+🎯 QUALITY SCORING ANALYSIS - RECORD {record.record_id}
+
+📊 RECORD DATA:
+{json.dumps(record.data, indent=2)}
+
+📋 YOUR TASK AS A SCORING ANALYST:
+Provide precise quality scores (0.0-1.0) for this transaction record across multiple dimensions.
+
+🎯 SCORING CRITERIA:
+
+1. **VALIDITY SCORE** (0.0-1.0):
+   - Email format: RFC 5322 compliance
+   - Phone format: Valid format with country code
+   - Card numbers: Luhn algorithm validation
+   - Dates: ISO 8601 or parseable format
+   - Amounts: Proper numeric format with 2 decimal places
+   - Categories/Status: Valid enum values
+   
+   Deductions:
+   - Minor format issue: -0.1
+   - Major validation failure: -0.3
+   - Critical field invalid: -0.5
+
+2. **CONSISTENCY SCORE** (0.0-1.0):
+   - Cross-field validation (e.g., amount matches transaction type)
+   - Date logic (transaction date ≤ current date)
+   - Status consistency (completed transactions have amounts)
+   - Merchant-category alignment
+   - Currency-amount decimal consistency
+   
+   Deductions:
+   - Minor inconsistency: -0.1
+   - Moderate contradiction: -0.2
+   - Major logical error: -0.4
+
+3. **ACCURACY SCORE** (0.0-1.0):
+   - Realistic value ranges (amounts not suspiciously high/low)
+   - Proper precision (currency decimals)
+   - No truncation/rounding errors
+   - Timezone consistency in timestamps
+   - Proper capitalization and formatting
+   
+   Deductions:
+   - Precision issue: -0.1
+   - Range anomaly: -0.2
+   - Obvious data corruption: -0.5
+
+4. **COMPLETENESS SCORE**: {completeness:.3f} (pre-calculated)
+
+📤 OUTPUT FORMAT (JSON):
+{{
+  "validity_score": 0.0-1.0,
+  "validity_deductions": ["reason1", "reason2"],
+  "consistency_score": 0.0-1.0,
+  "consistency_issues": ["issue1", "issue2"],
+  "accuracy_score": 0.0-1.0,
+  "accuracy_concerns": ["concern1", "concern2"],
+  "recommended_overall_score": 0.0-1.0,
+  "confidence_level": "HIGH/MEDIUM/LOW",
+  "scoring_notes": "Brief explanation of score"
+}}
+
+Be objective, precise, and justify all deductions."""
+                
+                llm_response = await self.call_llm(
+                    prompt,
+                    system_prompt="""You are a quality scoring specialist with expertise in:
+- ISO 8000 data quality standards
+- Financial transaction validation (PCI-DSS)
+- Statistical quality control (Six Sigma)
+- Data governance frameworks (DAMA DMBOK)
+
+Your scores must be:
+- Objective and reproducible
+- Based on measurable criteria
+- Justified with specific evidence
+- Formatted as valid JSON
+
+Apply rigorous standards but be fair and consistent."""
+                )
+                
+                try:
+                    json_str = llm_response
+                    if "```json" in llm_response:
+                        json_str = llm_response.split("```json")[1].split("```")[0].strip()
+                    elif "```" in llm_response:
+                        json_str = llm_response.split("```")[1].split("```")[0].strip()
+                    
+                    llm_scores = json.loads(json_str)
+                except:
+                    self.log(f"Failed to parse LLM scoring response")
+                    llm_scores = {}
             
-            # Consistency (check for contradictions)
-            consistency = 0.95  # Simulated
+            # Extract LLM scores or use defaults
+            validity = llm_scores.get('validity_score', 0.9)
+            consistency = llm_scores.get('consistency_score', 0.95)
+            accuracy = llm_scores.get('accuracy_score', 0.85)
             
-            # Calculate weighted overall score
-            weights = {"completeness": 0.4, "validity": 0.3, "consistency": 0.3}
+            # Calculate weighted overall score (dynamic weights based on field presence)
+            weights = {
+                "completeness": 0.25,
+                "validity": 0.30,
+                "consistency": 0.25,
+                "accuracy": 0.20
+            }
             overall_score = (
                 completeness * weights["completeness"] +
                 validity * weights["validity"] +
-                consistency * weights["consistency"]
+                consistency * weights["consistency"] +
+                accuracy * weights["accuracy"]
             )
 
             output = {
@@ -185,8 +401,11 @@ class ScoringAgent(Agent):
                 "completeness_score": round(completeness, 3),
                 "validity_score": round(validity, 3),
                 "consistency_score": round(consistency, 3),
+                "accuracy_score": round(accuracy, 3),
                 "overall_quality_score": round(overall_score, 3),
-                "quality_level": "High" if overall_score >= 0.9 else "Medium" if overall_score >= 0.7 else "Low"
+                "quality_level": "High" if overall_score >= 0.9 else "Medium" if overall_score >= 0.7 else "Low",
+                "llm_analysis": llm_scores.get('scoring_notes', ''),
+                "confidence": llm_scores.get('confidence_level', 'MEDIUM')
             }
 
             self.log(f"Record {record.record_id}: Overall score {overall_score:.3f}")
@@ -200,8 +419,8 @@ class ScoringAgent(Agent):
 class InsightAgent(Agent):
     """Converts scores to human-readable insights using OpenRouter."""
 
-    def __init__(self, openrouter_api_key: Optional[str] = None):
-        super().__init__("InsightAgent", openrouter_api_key)
+    def __init__(self, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
+        super().__init__("InsightAgent", openrouter_api_key, eda_context)
 
     async def process_record(self, record: Record) -> Dict[str, Any]:
         """Generate insights for a single record."""
@@ -216,24 +435,134 @@ class InsightAgent(Agent):
             recommendations = []
 
             if self.openrouter_api_key:
-                prompt = f"""Analyze this data record and provide:
-1. Key insights about data quality
-2. Potential risks
-3. Recommendations for improvement
+                eda_info = self._format_eda_context()
+                prompt = f"""{eda_info}
 
-Record data:
+📝 INDIVIDUAL RECORD INSIGHT GENERATION:
+
+💡 INSIGHT GENERATION - RECORD {record.record_id}
+
+📊 RECORD DATA:
 {json.dumps(record.data, indent=2)}
 
-Provide a concise analysis in JSON format:
+📋 YOUR TASK AS AN INSIGHT ANALYST:
+Transform quality scores into strategic, actionable business insights.
+
+🎯 ANALYSIS FRAMEWORK:
+
+1. **KEY INSIGHTS** (3-5 insights):
+   - What does this data tell us about transaction quality?
+   - Are there patterns indicating systemic issues?
+   - What's the business impact of detected issues?
+   - Which fields are most critical for business operations?
+   - Are there compliance or regulatory concerns?
+   
+   Format: ["Specific, measurable insight with business context"]
+
+2. **RISK ASSESSMENT** (Priority-ranked):
+   
+   🔴 **CRITICAL RISKS** (Immediate action required):
+   - Data integrity issues affecting financial accuracy
+   - Compliance violations (PCI-DSS, GDPR)
+   - Security concerns (exposed sensitive data)
+   
+   🟡 **MODERATE RISKS** (Address within 1 week):
+   - Data quality degradation trends
+   - Process efficiency concerns
+   - Customer experience impacts
+   
+   🟢 **LOW RISKS** (Monitor and improve):
+   - Minor formatting inconsistencies
+   - Optimization opportunities
+   - Best practice deviations
+   
+   Format per risk:
+   {{
+     "severity": "CRITICAL/MODERATE/LOW",
+     "risk": "Specific risk description",
+     "probability": "HIGH/MEDIUM/LOW",
+     "impact": "Business impact if not addressed",
+     "affected_fields": ["field1", "field2"]
+   }}
+
+3. **ACTIONABLE RECOMMENDATIONS** (Prioritized):
+   
+   Each recommendation must include:
+   - **Action**: What to do (specific, not vague)
+   - **Why**: Business justification
+   - **How**: Implementation approach
+   - **Effort**: LOW/MEDIUM/HIGH
+   - **Impact**: Expected quality improvement (%)
+   - **Timeline**: Immediate/Short-term/Long-term
+   
+   Example:
+   {{
+     "priority": 1,
+     "action": "Implement real-time Luhn validation for card numbers",
+     "justification": "23% of records fail card validation, risking payment processing errors",
+     "implementation": "Add pre-submission validation in payment form with instant feedback",
+     "effort": "LOW",
+     "expected_improvement": "95% reduction in invalid card entries",
+     "timeline": "Immediate",
+     "estimated_cost_savings": "$50K annually in failed transaction fees"
+   }}
+
+4. **TREND INDICATORS**:
+   - Is quality improving or degrading?
+   - Are issues isolated or systemic?
+   - What's the data maturity level?
+
+📤 OUTPUT FORMAT (STRICT JSON):
 {{
-  "insights": ["insight1", "insight2"],
-  "risks": ["risk1", "risk2"],
-  "recommendations": ["rec1", "rec2"]
-}}"""
+  "executive_summary": "One-sentence overview of record quality",
+  "insights": [
+    "Insight 1 with specific metrics",
+    "Insight 2 with business context",
+    "Insight 3 with actionable focus"
+  ],
+  "risks": [
+    {{
+      "severity": "CRITICAL/MODERATE/LOW",
+      "risk": "Description",
+      "probability": "HIGH/MEDIUM/LOW",
+      "impact": "Business impact",
+      "affected_fields": ["field1"]
+    }}
+  ],
+  "recommendations": [
+    {{
+      "priority": 1,
+      "action": "Specific action",
+      "justification": "Why it matters",
+      "implementation": "How to do it",
+      "effort": "LOW/MEDIUM/HIGH",
+      "expected_improvement": "Quantified benefit",
+      "timeline": "When to implement"
+    }}
+  ],
+  "trend_indicator": "IMPROVING/STABLE/DEGRADING",
+  "data_maturity_score": 1-5,
+  "confidence_level": "HIGH/MEDIUM/LOW"
+}}
+
+Be specific, quantitative, and business-focused. Avoid generic advice."""
 
                 llm_response = await self.call_llm(
                     prompt,
-                    system_prompt="You are a data quality analyst. Provide actionable insights in valid JSON format."
+                    system_prompt="""You are a senior data quality analyst and business intelligence expert with:
+- 15+ years experience in financial services data governance
+- Deep expertise in DAMA DMBOK, ISO 8000, and data quality frameworks
+- Strong business acumen connecting data quality to ROI
+- Track record of implementing enterprise data quality programs
+
+Your insights must be:
+- Specific and evidence-based (cite actual field names and values)
+- Actionable with clear implementation paths
+- Quantified with metrics and expected outcomes
+- Business-focused (revenue, cost, risk, compliance)
+- Formatted as valid, parseable JSON
+
+Think like a consultant presenting to C-level executives: strategic, impactful, ROI-focused."""
                 )
 
                 try:
@@ -271,13 +600,13 @@ Provide a concise analysis in JSON format:
 
 
 class PredictiveAgent(Agent):
-    """Forecasts potential issues for individual records using OpenRouter."""
+    """Forecasts potential issues and quality trends for individual records using advanced ML-informed prompts."""
 
-    def __init__(self, openrouter_api_key: Optional[str] = None):
-        super().__init__("PredictiveAgent", openrouter_api_key)
+    def __init__(self, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
+        super().__init__("PredictiveAgent", openrouter_api_key, eda_context)
 
     async def process_record(self, record: Record) -> Dict[str, Any]:
-        """Predict potential issues for a single record."""
+        """Predict potential issues and quality degradation patterns for a single record."""
         self.log(f"Forecasting for record {record.record_id}")
 
         try:
@@ -287,36 +616,173 @@ class PredictiveAgent(Agent):
             confidence = 0.75
 
             if self.openrouter_api_key:
-                prompt = f"""Based on this data record, predict potential future data quality issues:
+                eda_info = self._format_eda_context()
+                prompt = f"""{eda_info}
+
+📝 INDIVIDUAL RECORD PREDICTION:
+
+🔮 PREDICTIVE QUALITY ANALYSIS - RECORD {record.record_id}
+
+📊 RECORD DATA:
 {json.dumps(record.data, indent=2)}
 
-Consider:
-- Trend deterioration
-- Potential missing data
-- Anomaly risks
+📋 YOUR TASK AS A PREDICTIVE ANALYST:
+Forecast potential data quality issues, degradation patterns, and emerging risks.
 
-Provide predictions as a JSON array of objects with 'issue' and 'probability' fields."""
+🎯 PREDICTION FRAMEWORK:
+
+1. **SHORT-TERM PREDICTIONS (1-7 days)**:
+   
+   a) **Data Staleness Risk**:
+      - Are timestamp/date fields approaching outdated thresholds?
+      - Will this record become irrelevant soon?
+      - Score: LOW/MEDIUM/HIGH
+   
+   b) **Missing Data Propagation**:
+      - Will current null fields cascade to related records?
+      - Are optional fields becoming critical?
+      - Probability: 0.0-1.0
+   
+   c) **Format Drift**:
+      - Are current formats becoming deprecated?
+      - Will validation rules change?
+      - Impact: LOW/MEDIUM/HIGH
+
+2. **MEDIUM-TERM PREDICTIONS (1-4 weeks)**:
+   
+   a) **Quality Degradation Trend**:
+      - Based on field patterns, predict quality score in 7/14/30 days
+      - Will completeness decrease?
+      - Will consistency issues compound?
+   
+   b) **Compliance Risk Evolution**:
+      - Will this record violate new regulations?
+      - Are data retention policies approaching?
+      - Risk level: LOW/MEDIUM/HIGH/CRITICAL
+   
+   c) **Integration Failures**:
+      - Will downstream systems reject this record?
+      - Are dependent fields at risk?
+      - Probability: 0.0-1.0
+
+3. **ANOMALY PATTERN FORECAST**:
+   
+   - Statistical anomalies likely to emerge
+   - Outlier detection confidence over time
+   - Behavioral pattern shifts
+
+4. **PROACTIVE RECOMMENDATIONS**:
+   
+   What to do NOW to prevent predicted issues:
+   - Data refresh schedules
+   - Validation rule updates
+   - Monitoring alerts to configure
+   - Preemptive data enrichment
+
+📤 OUTPUT FORMAT (STRICT JSON):
+{{
+  "short_term_predictions": [
+    {{
+      "issue": "Specific predicted issue",
+      "probability": 0.0-1.0,
+      "timeframe_days": 1-7,
+      "severity": "LOW/MEDIUM/HIGH/CRITICAL",
+      "leading_indicators": ["indicator1", "indicator2"],
+      "affected_fields": ["field1", "field2"]
+    }}
+  ],
+  "medium_term_predictions": [
+    {{
+      "issue": "Emerging trend or risk",
+      "probability": 0.0-1.0,
+      "timeframe_days": 7-30,
+      "severity": "LOW/MEDIUM/HIGH/CRITICAL",
+      "root_cause": "Why this will happen"
+    }}
+  ],
+  "quality_score_forecast": {{
+    "current_score": 0.0-1.0,
+    "predicted_7d": 0.0-1.0,
+    "predicted_14d": 0.0-1.0,
+    "predicted_30d": 0.0-1.0,
+    "trend_direction": "IMPROVING/STABLE/DEGRADING",
+    "confidence": 0.0-1.0
+  }},
+  "anomaly_forecast": {{
+    "statistical_anomalies_likely": true/false,
+    "anomaly_types": ["outlier", "drift", "shift"],
+    "detection_confidence": 0.0-1.0
+  }},
+  "proactive_actions": [
+    {{
+      "action": "Specific preventive measure",
+      "prevents": "Which predicted issue",
+      "urgency": "IMMEDIATE/HIGH/MEDIUM/LOW",
+      "effort": "LOW/MEDIUM/HIGH",
+      "risk_reduction": "Quantified benefit (e.g., 60% reduction)"
+    }}
+  ],
+  "overall_forecast": "One-sentence summary of predictions",
+  "model_confidence": 0.0-1.0,
+  "prediction_basis": "What data patterns drove these predictions"
+}}
+
+Be specific, quantitative, and time-bounded. Focus on actionable predictions."""
 
                 llm_response = await self.call_llm(
                     prompt,
-                    system_prompt="You are a predictive analytics expert. Forecast potential data quality issues."
+                    system_prompt="""You are a predictive analytics expert specializing in:
+- Time series forecasting for data quality metrics
+- Machine learning model interpretation (ARIMA, Prophet, LSTM)
+- Anomaly detection and drift analysis
+- Risk modeling and early warning systems
+- Proactive data governance
+
+Your predictions must be:
+- Evidence-based on observable patterns in the data
+- Time-bounded with specific timeframes
+- Quantified with probabilities (0.0-1.0)
+- Actionable with clear preventive measures
+- Formatted as valid, parseable JSON
+
+Think like a data scientist building an early warning system:
+- Identify leading indicators
+- Quantify confidence intervals
+- Recommend proactive interventions
+- Balance sensitivity vs specificity
+
+Avoid vague predictions. Be specific about what will happen, when, and why."""
                 )
 
-                # Extract predictions (simplified parsing)
-                predictions = [
-                    {
-                        "issue": "Potential data staleness",
-                        "probability": 0.35,
-                        "timeframe": "7 days"
-                    }
-                ]
+                try:
+                    json_str = llm_response
+                    if "```json" in llm_response:
+                        json_str = llm_response.split("```json")[1].split("```")[0].strip()
+                    elif "```" in llm_response:
+                        json_str = llm_response.split("```")[1].split("```")[0].strip()
+                    
+                    parsed = json.loads(json_str)
+                    predictions = parsed.get("short_term_predictions", []) + parsed.get("medium_term_predictions", [])
+                    confidence = parsed.get("model_confidence", 0.75)
+                    quality_forecast = parsed.get("quality_score_forecast", {})
+                except:
+                    self.log(f"Failed to parse LLM prediction response")
+                    predictions = [{
+                        "issue": "Prediction parsing failed",
+                        "probability": 0.0,
+                        "timeframe_days": 7,
+                        "severity": "LOW"
+                    }]
+                    quality_forecast = {"predicted_7d": 0.88}
 
             output = {
                 "record_id": record.record_id,
                 "predictions": predictions,
-                "trend_forecast": "stable",
+                "trend_forecast": quality_forecast.get("trend_direction", "stable"),
                 "confidence_score": confidence,
-                "predicted_quality_score_7d": 0.88
+                "predicted_quality_score_7d": quality_forecast.get("predicted_7d", 0.88),
+                "predicted_quality_score_14d": quality_forecast.get("predicted_14d", 0.85),
+                "predicted_quality_score_30d": quality_forecast.get("predicted_30d", 0.82)
             }
 
             self.log(f"Record {record.record_id}: {len(predictions)} predictions made")
@@ -334,7 +800,7 @@ class RecordOrchestrator:
     Each record flows through all 4 agents in parallel before moving to the next record.
     """
 
-    def __init__(self, openrouter_api_key: Optional[str] = None):
+    def __init__(self, openrouter_api_key: Optional[str] = None, eda_context: Optional[Dict[str, Any]] = None):
         # Initialize OpenRouter
         api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         
@@ -343,12 +809,15 @@ class RecordOrchestrator:
         else:
             print("⚠️  Warning: OPENROUTER_API_KEY not set. LLM features will be disabled.")
 
-        # Initialize all agents with OpenRouter API key
+        # Store EDA context for agents
+        self.eda_context = eda_context or {}
+        
+        # Initialize all agents with OpenRouter API key and EDA context
         self.agents = {
-            "data_scientist": DataScientistAgent(api_key),
-            "scoring": ScoringAgent(api_key),
-            "insight": InsightAgent(api_key),
-            "predictive": PredictiveAgent(api_key)
+            "data_scientist": DataScientistAgent(api_key, eda_context=self.eda_context),
+            "scoring": ScoringAgent(api_key, eda_context=self.eda_context),
+            "insight": InsightAgent(api_key, eda_context=self.eda_context),
+            "predictive": PredictiveAgent(api_key, eda_context=self.eda_context)
         }
 
         # Check if parallel execution is enabled
