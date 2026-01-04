@@ -14,6 +14,8 @@ from datetime import datetime
 from enum import Enum
 import json
 import httpx
+import re
+import ast
 
 
 class TaskStatus(str, Enum):
@@ -140,7 +142,7 @@ class Agent(ABC):
                         "model": "qwen/qwen3-235b-a22b-2507",
                         "messages": messages,
                         "temperature": 0.7,
-                        "max_tokens": 500
+                        "max_tokens": 4000
                     },
                     timeout=30.0
                 )
@@ -150,6 +152,59 @@ class Agent(ABC):
         except Exception as e:
             self.log(f"LLM error: {str(e)}")
             return f"Error: {str(e)}"
+
+    def _extract_json(self, response: str) -> Dict[str, Any]:
+        """Extract and parse JSON from LLM response with robust error handling."""
+        # 1. Try extracting from markdown code blocks (case insensitive)
+        code_block_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
+        match = re.search(code_block_pattern, response, re.DOTALL | re.IGNORECASE)
+        if match:
+            json_str = match.group(1)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                # Try literal eval for Python-style dicts
+                try:
+                    return ast.literal_eval(json_str)
+                except:
+                    pass
+
+        # 2. Try finding the first '{' and matching '}' using a stack-based approach
+        # (Simple regex approximations often fail with nested braces)
+        try:
+            # Find the first '{'
+            start_index = response.find('{')
+            if start_index != -1:
+                # Find the last '}'
+                end_index = response.rfind('}')
+                if end_index != -1 and end_index > start_index:
+                    potential_json = response[start_index:end_index+1]
+                    try:
+                        return json.loads(potential_json)
+                    except json.JSONDecodeError:
+                        try:
+                            # Handle Python True/False/None
+                            return ast.literal_eval(potential_json)
+                        except:
+                            pass
+        except:
+            pass
+            
+        # 3. Last ditch: Try direct parsing of the whole string
+        try:
+            return json.loads(response)
+        except:
+            pass
+            
+        # Log failure and dump full response for debugging
+        self.log(f"Failed to extract JSON. Dumping to llm_debug_dump.log")
+        try:
+            with open("llm_debug_dump.log", "a", encoding="utf-8") as f:
+                f.write(f"\n\n{'='*80}\nTIMESTAMP: {datetime.now().isoformat()}\nAGENT: {self.name}\n{'='*80}\n{response}\n{'='*80}\n")
+        except Exception as e:
+            self.log(f"Failed to write dump: {e}")
+            
+        return {}
 
 
 class DataScientistAgent(Agent):
@@ -216,7 +271,7 @@ Perform comprehensive data quality assessment on this transaction record.
 
 📤 OUTPUT FORMAT (JSON):
 {{
-  "completeness_score": 0.0-1.0,
+  "completeness_score": 0.95,
   "missing_critical_fields": ["field1", "field2"],
   "type_issues": ["description"],
   "format_violations": ["description"],
@@ -335,14 +390,14 @@ Provide precise quality scores (0.0-1.0) for this transaction record across mult
 
 📤 OUTPUT FORMAT (JSON):
 {{
-  "validity_score": 0.0-1.0,
+  "validity_score": 0.95,
   "validity_deductions": ["reason1", "reason2"],
-  "consistency_score": 0.0-1.0,
+  "consistency_score": 0.95,
   "consistency_issues": ["issue1", "issue2"],
-  "accuracy_score": 0.0-1.0,
+  "accuracy_score": 0.95,
   "accuracy_concerns": ["concern1", "concern2"],
-  "recommended_overall_score": 0.0-1.0,
-  "confidence_level": "HIGH/MEDIUM/LOW",
+  "recommended_overall_score": 0.95,
+  "confidence_level": "HIGH",
   "scoring_notes": "Brief explanation of score"
 }}
 
@@ -365,17 +420,10 @@ Your scores must be:
 Apply rigorous standards but be fair and consistent."""
                 )
                 
-                try:
-                    json_str = llm_response
-                    if "```json" in llm_response:
-                        json_str = llm_response.split("```json")[1].split("```")[0].strip()
-                    elif "```" in llm_response:
-                        json_str = llm_response.split("```")[1].split("```")[0].strip()
-                    
-                    llm_scores = json.loads(json_str)
-                except:
-                    self.log(f"Failed to parse LLM scoring response")
-                    llm_scores = {}
+                
+                llm_scores = self._extract_json(llm_response)
+                if not llm_scores:
+                    self.log(f"Using default scores due to parsing failure")
             
             # Extract LLM scores or use defaults
             validity = llm_scores.get('validity_score', 0.9)
@@ -565,21 +613,15 @@ Your insights must be:
 Think like a consultant presenting to C-level executives: strategic, impactful, ROI-focused."""
                 )
 
-                try:
-                    # Try to parse JSON from LLM response
-                    # Extract JSON if wrapped in markdown code blocks
-                    json_str = llm_response
-                    if "```json" in llm_response:
-                        json_str = llm_response.split("```json")[1].split("```")[0].strip()
-                    elif "```" in llm_response:
-                        json_str = llm_response.split("```")[1].split("```")[0].strip()
-                    
-                    parsed = json.loads(json_str)
+                
+                parsed = self._extract_json(llm_response)
+                
+                if parsed:
                     insights = parsed.get("insights", [])
                     risks = parsed.get("risks", [])
                     recommendations = parsed.get("recommendations", [])
-                except json.JSONDecodeError:
-                    insights = ["Data quality analysis completed"]
+                else:
+                    insights = ["Data quality analysis completed (parsing failed)"]
                     risks = ["Unable to parse detailed analysis"]
                     recommendations = ["Review data manually"]
 
@@ -684,9 +726,9 @@ Forecast potential data quality issues, degradation patterns, and emerging risks
   "short_term_predictions": [
     {{
       "issue": "Specific predicted issue",
-      "probability": 0.0-1.0,
-      "timeframe_days": 1-7,
-      "severity": "LOW/MEDIUM/HIGH/CRITICAL",
+      "probability": 0.85,
+      "timeframe_days": 7,
+      "severity": "HIGH",
       "leading_indicators": ["indicator1", "indicator2"],
       "affected_fields": ["field1", "field2"]
     }}
@@ -694,36 +736,36 @@ Forecast potential data quality issues, degradation patterns, and emerging risks
   "medium_term_predictions": [
     {{
       "issue": "Emerging trend or risk",
-      "probability": 0.0-1.0,
-      "timeframe_days": 7-30,
-      "severity": "LOW/MEDIUM/HIGH/CRITICAL",
+      "probability": 0.65,
+      "timeframe_days": 30,
+      "severity": "MEDIUM",
       "root_cause": "Why this will happen"
     }}
   ],
   "quality_score_forecast": {{
-    "current_score": 0.0-1.0,
-    "predicted_7d": 0.0-1.0,
-    "predicted_14d": 0.0-1.0,
-    "predicted_30d": 0.0-1.0,
-    "trend_direction": "IMPROVING/STABLE/DEGRADING",
-    "confidence": 0.0-1.0
+    "current_score": 0.90,
+    "predicted_7d": 0.88,
+    "predicted_14d": 0.85,
+    "predicted_30d": 0.82,
+    "trend_direction": "DEGRADING",
+    "confidence": 0.90
   }},
   "anomaly_forecast": {{
-    "statistical_anomalies_likely": true/false,
+    "statistical_anomalies_likely": true,
     "anomaly_types": ["outlier", "drift", "shift"],
-    "detection_confidence": 0.0-1.0
+    "detection_confidence": 0.85
   }},
   "proactive_actions": [
     {{
       "action": "Specific preventive measure",
       "prevents": "Which predicted issue",
-      "urgency": "IMMEDIATE/HIGH/MEDIUM/LOW",
-      "effort": "LOW/MEDIUM/HIGH",
-      "risk_reduction": "Quantified benefit (e.g., 60% reduction)"
+      "urgency": "HIGH",
+      "effort": "LOW",
+      "risk_reduction": "60%"
     }}
   ],
   "overall_forecast": "One-sentence summary of predictions",
-  "model_confidence": 0.0-1.0,
+  "model_confidence": 0.90,
   "prediction_basis": "What data patterns drove these predictions"
 }}
 
@@ -754,18 +796,14 @@ Think like a data scientist building an early warning system:
 Avoid vague predictions. Be specific about what will happen, when, and why."""
                 )
 
-                try:
-                    json_str = llm_response
-                    if "```json" in llm_response:
-                        json_str = llm_response.split("```json")[1].split("```")[0].strip()
-                    elif "```" in llm_response:
-                        json_str = llm_response.split("```")[1].split("```")[0].strip()
-                    
-                    parsed = json.loads(json_str)
+                
+                parsed = self._extract_json(llm_response)
+                
+                if parsed:
                     predictions = parsed.get("short_term_predictions", []) + parsed.get("medium_term_predictions", [])
                     confidence = parsed.get("model_confidence", 0.75)
                     quality_forecast = parsed.get("quality_score_forecast", {})
-                except:
+                else:
                     self.log(f"Failed to parse LLM prediction response")
                     predictions = [{
                         "issue": "Prediction parsing failed",
