@@ -153,6 +153,21 @@ class Agent(ABC):
             self.log(f"LLM error: {str(e)}")
             return f"Error: {str(e)}"
 
+    def _repair_json(self, json_str: str) -> str:
+        """Attempt to repair invalid JSON strings."""
+        # Remove non-printable characters and potential garbage
+        # Keep basic ASCII, curly braces, brackets, quotes, commas, colons, newlines
+        clean_str = re.sub(r'[^\x20-\x7E\s]', '', json_str)
+        
+        # fix trailing commas
+        clean_str = re.sub(r',(\s*[}\]])', r'\1', clean_str)
+        
+        # simple quote fixes (this is risky but helps with basic errors)
+        # ensure keys are double quoted
+        clean_str = re.sub(r'([{,]\s*)([a-zA-Z_]\w*)(\s*:)', r'\1"\2"\3', clean_str)
+        
+        return clean_str
+
     def _extract_json(self, response: str) -> Dict[str, Any]:
         """Extract and parse JSON from LLM response with robust error handling."""
         # 1. Try extracting from markdown code blocks (case insensitive)
@@ -163,11 +178,15 @@ class Agent(ABC):
             try:
                 return json.loads(json_str)
             except json.JSONDecodeError:
-                # Try literal eval for Python-style dicts
                 try:
                     return ast.literal_eval(json_str)
                 except:
-                    pass
+                    # Try validation/repair
+                    try:
+                        repaired = self._repair_json(json_str)
+                        return json.loads(repaired)
+                    except:
+                        pass
 
         # 2. Try finding the first '{' and matching '}' using a stack-based approach
         # (Simple regex approximations often fail with nested braces)
@@ -186,7 +205,12 @@ class Agent(ABC):
                             # Handle Python True/False/None
                             return ast.literal_eval(potential_json)
                         except:
-                            pass
+                            # Try validation/repair
+                            try:
+                                repaired = self._repair_json(potential_json)
+                                return json.loads(repaired)
+                            except:
+                                pass
         except:
             pass
             
