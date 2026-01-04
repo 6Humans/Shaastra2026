@@ -1,4 +1,5 @@
 import { Brain, AlertTriangle, CheckCircle } from "lucide-react"
+import ReactMarkdown from "react-markdown"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import type { LLMInsights } from "@/types/api"
@@ -21,9 +22,9 @@ export function LLMInsightsPanel({ insights }: LLMInsightsPanelProps) {
                 {/* Executive Summary */}
                 <div className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 rounded-xl p-5 border border-purple-500/20">
                     <h4 className="text-sm font-semibold text-purple-400 mb-3">Executive Summary</h4>
-                    <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
-                        {insights.summary}
-                    </p>
+                    <div className="text-sm leading-relaxed text-muted-foreground [&>p]:mb-2 [&>p:last-child]:mb-0">
+                        <ReactMarkdown>{insights.summary}</ReactMarkdown>
+                    </div>
                 </div>
 
                 {/* Root Causes */}
@@ -36,7 +37,13 @@ export function LLMInsightsPanel({ insights }: LLMInsightsPanelProps) {
                         <div className="space-y-2">
                             {insights.root_causes.map((cause, index) => {
                                 const priority = extractPriority(cause)
-                                const cleanedCause = cause.replace(/\[(HIGH|MEDIUM|LOW)\]/gi, "").trim()
+                                // Clean up the string: remove priority tags, remove leading/trailing markdown characters like **, and trim
+                                const cleanedCause = cause
+                                    .replace(/\[(HIGH|MEDIUM|LOW)\]/gi, "")
+                                    .replace(/priority/gi, "")
+                                    .replace(/^\*\*|\*\*$/g, "") // Remove leading/trailing bold markers
+                                    .replace(/^-\s*/, "") // Remove leading list markers
+                                    .trim()
 
                                 return (
                                     <div
@@ -52,7 +59,9 @@ export function LLMInsightsPanel({ insights }: LLMInsightsPanelProps) {
                                         >
                                             {priority}
                                         </Badge>
-                                        <p className="text-sm text-muted-foreground">{cleanedCause}</p>
+                                        <div className="text-sm text-muted-foreground [&>p]:mb-1 [&>p:last-child]:mb-0">
+                                            <ReactMarkdown>{cleanedCause}</ReactMarkdown>
+                                        </div>
                                     </div>
                                 )
                             })}
@@ -70,7 +79,12 @@ export function LLMInsightsPanel({ insights }: LLMInsightsPanelProps) {
                         <div className="space-y-2">
                             {insights.recommendations.map((rec, index) => {
                                 const priority = extractPriority(rec)
-                                const cleanedRec = rec.replace(/\[(HIGH|MEDIUM|LOW)\]/gi, "").trim()
+                                const cleanedRec = rec
+                                    .replace(/\[(HIGH|MEDIUM|LOW)\]/gi, "")
+                                    .replace(/priority/gi, "")
+                                    .replace(/^\*\*|\*\*$/g, "")
+                                    .replace(/^-\s*/, "")
+                                    .trim()
 
                                 return (
                                     <div
@@ -89,7 +103,10 @@ export function LLMInsightsPanel({ insights }: LLMInsightsPanelProps) {
                                                     {priority} Priority
                                                 </Badge>
                                             )}
-                                            <p className="text-sm text-muted-foreground">{cleanedRec}</p>
+
+                                            <div className="text-sm text-muted-foreground [&>p]:mb-1 [&>p:last-child]:mb-0">
+                                                <ReactMarkdown>{cleanedRec}</ReactMarkdown>
+                                            </div>
                                         </div>
                                     </div>
                                 )
