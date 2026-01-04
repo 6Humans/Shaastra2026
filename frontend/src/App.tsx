@@ -12,13 +12,15 @@ import { ValidationErrors } from "@/components/anomaly/ValidationErrors"
 import { AIAnalysisSummary } from "@/components/ai/AIAnalysisSummary"
 import { LLMInsightsPanel } from "@/components/insights/LLMInsightsPanel"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
-import { analyzeTransactions } from "@/lib/api"
+import { analyzeTransactions, ValidationFailureError } from "@/lib/api"
 import type { AnalysisResponse } from "@/types/api"
 
 function App() {
   const [activeSection, setActiveSection] = useState("upload")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [validationErrors, setValidationErrors] = useState<any[]>([])
+  const [recommendation, setRecommendation] = useState<string | null>(null)
   const [data, setData] = useState<AnalysisResponse | null>(null)
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 
@@ -31,7 +33,15 @@ function App() {
       setData(result)
       setActiveSection("overview")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to analyze file")
+      if (err instanceof ValidationFailureError) {
+        setError(err.message)
+        setValidationErrors(err.failures)
+        setRecommendation(err.recommendation || null)
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to analyze file")
+        setValidationErrors([])
+        setRecommendation(null)
+      }
     } finally {
       setIsLoading(false)
     }
@@ -54,9 +64,37 @@ function App() {
             <FileUpload onFileSelect={handleFileSelect} isLoading={isLoading} />
 
             {error && (
-              <Alert variant="destructive">
-                <AlertTitle>Error</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
+              <Alert variant="destructive" className="animate-in fade-in slide-in-from-top-2">
+                <AlertTitle className="flex items-center gap-2 font-bold">
+                  Error Analysis Failed
+                </AlertTitle>
+                <AlertDescription className="mt-2">
+                  <p className="text-base font-medium mb-3">{error}</p>
+
+                  {recommendation && (
+                    <div className="mb-4 text-sm bg-destructive-foreground/10 p-3 rounded-md border border-destructive-foreground/20">
+                      <span className="font-bold flex items-center gap-2 mb-1">
+                        💡 Recommendation
+                      </span>
+                      {recommendation}
+                    </div>
+                  )}
+
+                  {validationErrors.length > 0 && (
+                    <div className="space-y-2 bg-white/90 dark:bg-black/40 p-3 rounded-md text-destructive-foreground">
+                      <p className="font-semibold text-sm border-b border-destructive-foreground/20 pb-1 mb-2">
+                        Critical Validation Failures ({validationErrors.length})
+                      </p>
+                      <ul className="list-disc pl-5 space-y-2 text-sm">
+                        {validationErrors.map((fail, idx) => (
+                          <li key={idx}>
+                            <span className="font-semibold">Column `{fail.column}`</span>: {fail.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </AlertDescription>
               </Alert>
             )}
           </div>

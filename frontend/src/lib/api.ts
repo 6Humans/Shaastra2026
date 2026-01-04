@@ -10,6 +10,19 @@ const apiClient = axios.create({
     },
 });
 
+
+export class ValidationFailureError extends Error {
+    failures: any[];
+    recommendation?: string;
+
+    constructor(message: string, failures: any[] = [], recommendation?: string) {
+        super(message);
+        this.name = "ValidationFailureError";
+        this.failures = failures;
+        this.recommendation = recommendation;
+    }
+}
+
 export async function analyzeTransactions(
     file: File,
     numSamples: number = 5
@@ -31,9 +44,11 @@ export async function analyzeTransactions(
     } catch (error) {
         const axiosError = error as AxiosError<APIError>;
         if (axiosError.response?.status === 422) {
-            throw new Error(
-                axiosError.response.data?.message ||
-                "Critical validation failures detected"
+            const data = axiosError.response.data;
+            throw new ValidationFailureError(
+                data?.message || "Critical validation failures detected",
+                data?.failures || [],
+                data?.recommendation
             );
         }
         throw new Error(
