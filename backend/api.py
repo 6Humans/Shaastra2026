@@ -14,6 +14,7 @@ from typing import Dict, Any
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
@@ -27,6 +28,15 @@ app = FastAPI(
     title="Bank Transaction Analysis API",
     description="Upload CSV files for AI-powered transaction analysis",
     version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
