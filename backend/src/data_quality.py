@@ -30,8 +30,12 @@ from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 import httpx
+from dotenv import load_dotenv
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 class DataQualityAssessment:
@@ -63,6 +67,8 @@ class DataQualityAssessment:
         if not self.api_key:
             print("⚠️  WARNING: OPENROUTER_API_KEY not set - LLM insights will be unavailable")
             print("   All metric computations will still work (no simulation)")
+        else:
+            print(f"✅ LLM INSIGHTS ENABLED: API key loaded (length: {len(self.api_key)})")
 
         
     def calculate_completeness(self) -> Dict[str, Any]:
