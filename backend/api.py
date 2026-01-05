@@ -199,7 +199,6 @@ def create_anomaly_report(eda_results: Dict[str, Any]) -> Dict[str, Any]:
                 "column": col,
                 "outlier_count": outlier_info.get('outliers', 0),
                 "outlier_percentage": outlier_info.get('outlier_percentage', 0),
-                "sample_values": outlier_info.get('outlier_sample', [])[:5],
                 "severity": "high" if outlier_info.get('outlier_percentage', 0) > 10 else "medium"
             })
     
