@@ -40,6 +40,31 @@ app.add_middleware(
 )
 
 
+def sanitize_for_json(obj):
+    """
+    Recursively sanitize data to be JSON-compliant.
+    Replaces NaN, Infinity, -Infinity with None.
+    """
+    import math
+    
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(item) for item in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    elif isinstance(obj, (np.floating, np.integer)):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return float(obj) if isinstance(obj, np.floating) else int(obj)
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
+
+
 def perform_eda(df: pd.DataFrame, dataset_name: str) -> Dict[str, Any]:
     """Perform comprehensive EDA with automated data quality assessment."""
     eda_results = {}
@@ -663,7 +688,10 @@ async def analyze_transactions(
             "markdown_report": markdown_report
         }
         
-        return JSONResponse(content=response_data)
+        # Sanitize response data to handle NaN/Infinity values
+        sanitized_response = sanitize_for_json(response_data)
+        
+        return JSONResponse(content=sanitized_response)
     
     except pd.errors.EmptyDataError:
         raise HTTPException(status_code=400, detail="CSV file is empty or invalid")
