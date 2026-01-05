@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react"
+import { Upload } from "lucide-react"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { Header } from "@/components/layout/Header"
 import { FileUpload } from "@/components/upload/FileUpload"
@@ -65,6 +66,25 @@ function App() {
     }
   }, [])
 
+  // Fallback UI for pages that require data
+  const NoDataFallback = () => (
+    <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
+      <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center mb-6">
+        <Upload className="w-10 h-10 text-muted-foreground" />
+      </div>
+      <h2 className="text-2xl font-bold mb-2">No Data Available</h2>
+      <p className="text-muted-foreground mb-6">
+        Please upload a CSV file first to view this section.
+      </p>
+      <button
+        onClick={() => setActiveSection("upload")}
+        className="px-6 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:opacity-90 transition-opacity"
+      >
+        Go to Upload
+      </button>
+    </div>
+  )
+
   const renderContent = () => {
     switch (activeSection) {
       case "upload":
@@ -119,7 +139,7 @@ function App() {
         )
 
       case "overview":
-        if (!data) return null
+        if (!data) return <NoDataFallback />
         return (
           <div className="space-y-6 animate-fade-in">
             <QualityScoreCard
@@ -141,7 +161,7 @@ function App() {
         )
 
       case "dimensions":
-        if (!data) return null
+        if (!data) return <NoDataFallback />
         return (
           <div className="space-y-6 animate-fade-in">
             <DimensionChart
@@ -156,7 +176,7 @@ function App() {
         )
 
       case "anomalies":
-        if (!data) return null
+        if (!data) return <NoDataFallback />
         return (
           <div className="space-y-6 animate-fade-in">
             <AnomalySummary summary={data.anomaly_report.summary} />
@@ -180,7 +200,7 @@ function App() {
         )
 
       case "ai-analysis":
-        if (!data) return null
+        if (!data) return <NoDataFallback />
         return (
           <div className="space-y-6 animate-fade-in">
             <AIAnalysisSummary analysis={data.ai_analysis} />
@@ -188,7 +208,7 @@ function App() {
         )
 
       case "insights":
-        if (!data) return null
+        if (!data) return <NoDataFallback />
         return (
           <div className="space-y-6 animate-fade-in">
             <LLMInsightsPanel insights={data.eda_analysis.data_quality_dimensions.llm_insights} />

@@ -17,7 +17,7 @@ interface OutlierTableProps {
 }
 
 export function OutlierTable({ outliers, totalOutliers }: OutlierTableProps) {
-    if (outliers.length === 0) {
+    if (!outliers || outliers.length === 0) {
         return (
             <Card>
                 <CardHeader>
@@ -48,7 +48,6 @@ export function OutlierTable({ outliers, totalOutliers }: OutlierTableProps) {
                             <TableHead>Column</TableHead>
                             <TableHead>Count</TableHead>
                             <TableHead>Percentage</TableHead>
-                            <TableHead className="hidden md:table-cell">Sample Values</TableHead>
                             <TableHead>Severity</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -66,15 +65,6 @@ export function OutlierTable({ outliers, totalOutliers }: OutlierTableProps) {
                                         {formatPercentage(outlier.outlier_percentage)}
                                     </span>
                                 </TableCell>
-                                <TableCell className="hidden md:table-cell">
-                                    <span className="text-sm text-muted-foreground font-mono">
-                                        {outlier.sample_values
-                                            .slice(0, 3)
-                                            .map(v => typeof v === 'number' ? v.toFixed(2) : String(v))
-                                            .join(", ")}
-                                        {outlier.sample_values.length > 3 && "..."}
-                                    </span>
-                                </TableCell>
                                 <TableCell>
                                     <Badge
                                         variant={outlier.severity === "high" ? "destructive" : "warning"}
@@ -90,3 +80,4 @@ export function OutlierTable({ outliers, totalOutliers }: OutlierTableProps) {
         </Card>
     )
 }
+
