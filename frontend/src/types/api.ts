@@ -42,12 +42,28 @@ export interface DimensionScores {
     consistency: number;
     accuracy: number;
     timeliness: number;
+    integrity: number;
+}
+
+export interface RecommendedAction {
+    field: string;
+    why: string;
+    impact: string;
+    action: string;
+    priority: "HIGH" | "MEDIUM" | "LOW";
+    effort?: "LOW" | "MEDIUM" | "HIGH";
+}
+
+export interface RootCause {
+    field?: string;
+    cause?: string;
+    severity?: "HIGH" | "MEDIUM" | "LOW";
 }
 
 export interface LLMInsights {
     summary: string;
-    root_causes: string[];
-    recommendations: string[];
+    root_causes: (string | RootCause)[];
+    recommended_actions: RecommendedAction[];
 }
 
 export interface AIAnalysis {
@@ -64,18 +80,32 @@ export interface AIAnalysis {
     detailed_results: RecordAnalysis[];
 }
 
+export interface DetailedPrediction {
+    issue: string;
+    probability: number;
+    timeframe_days: number;
+    severity: "HIGH" | "MEDIUM" | "LOW";
+    leading_indicators?: string[];
+    affected_fields?: string[];
+    root_cause?: string;
+}
+
+export interface RecordPredictions {
+    record_id?: string;
+    predictions: DetailedPrediction[];
+    trend_forecast: "improving" | "stable" | "declining" | string;
+    confidence_score: number;
+    predicted_quality_score_7d: number;
+    predicted_quality_score_14d: number;
+    predicted_quality_score_30d: number;
+}
+
 export interface RecordAnalysis {
     record_id: string;
     status: "completed" | "failed";
     quality_score: number;
     ai_insights: string[];
-    predictions: {
-        trend_forecast: "improving" | "stable" | "declining";
-        confidence_score: number;
-        predicted_quality_score_7d: number;
-        predicted_quality_score_14d: number;
-        predicted_quality_score_30d: number;
-    };
+    predictions: RecordPredictions;
     processing_time_ms: number;
     errors: string[];
 }

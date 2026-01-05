@@ -29,6 +29,7 @@ const dimensionLabels: Record<keyof DimensionScores, string> = {
     consistency: "Consistency",
     accuracy: "Accuracy",
     timeliness: "Timeliness",
+    integrity: "Integrity",
 }
 
 const dimensionDescriptions: Record<keyof DimensionScores, string> = {
@@ -38,6 +39,7 @@ const dimensionDescriptions: Record<keyof DimensionScores, string> = {
     consistency: "% following patterns",
     accuracy: "Outlier detection score",
     timeliness: "Data freshness score",
+    integrity: "Cross-field validation",
 }
 
 export function DimensionChart({ scores, chartType = "bar" }: DimensionChartProps) {

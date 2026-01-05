@@ -590,145 +590,304 @@ class DataQualityAssessment:
         else:
             return 'Data is stale - immediate refresh required'
     
-    def calculate_dynamic_weights(self) -> Dict[str, float]:
+    def calculate_integrity(self) -> Dict[str, Any]:
         """
-        Calculate dynamic weights for each dimension based on EDA analysis.
-        
-        Strategy:
-        - High missing data → Increase Completeness weight
-        - High duplicates → Increase Uniqueness weight
-        - Mixed data types → Increase Validity weight
-        - Pattern inconsistencies → Increase Consistency weight
-        - Outlier-prone data → Increase Accuracy weight
-        - Temporal data present → Increase Timeliness weight
-        
-        Returns normalized weights that sum to 1.0
+        Integrity: Cross-field relationships and business rule validation
+        Checks: Referential constraints, logical relationships, business rules
+        Score: 100 × (passed_checks / total_checks)
         """
-        print("\n" + "🔍"*40)
-        print("⚖️  CALCULATING DYNAMIC WEIGHTS BASED ON EDA")
-        print("🔍"*40)
+        print("\n🔢 [INTEGRITY] Computing...")
         
-        weights = {}
+        total_checks = 0
+        passed_checks = 0
+        integrity_issues = []
+        integrity_details = []
         
-        # 1. COMPLETENESS WEIGHT - Based on missingness severity
-        missing_cells = self.df.isnull().sum().sum()
-        missing_ratio = missing_cells / self.total_cells if self.total_cells > 0 else 0
+        # 1. CROSS-FIELD NUMERIC RELATIONSHIPS
+        numeric_cols = self.df.select_dtypes(include=[np.number]).columns.tolist()
+        total_cols = [c for c in numeric_cols if any(kw in c.lower() for kw in ['total', 'sum', 'net', 'gross'])]
         
-        if missing_ratio > 0.30:
-            completeness_weight = 0.25  # Critical issue
-            print(f"📊 Completeness: HIGH priority (missing: {missing_ratio*100:.1f}%) → weight: 0.25")
-        elif missing_ratio > 0.15:
-            completeness_weight = 0.20  # Moderate issue
-            print(f"📊 Completeness: MODERATE priority (missing: {missing_ratio*100:.1f}%) → weight: 0.20")
-        elif missing_ratio > 0.05:
-            completeness_weight = 0.15  # Minor issue
-            print(f"📊 Completeness: STANDARD priority (missing: {missing_ratio*100:.1f}%) → weight: 0.15")
-        else:
-            completeness_weight = 0.10  # Low priority
-            print(f"📊 Completeness: LOW priority (missing: {missing_ratio*100:.1f}%) → weight: 0.10")
+        for total_col in total_cols[:2]:
+            try:
+                non_negative = (self.df[total_col] >= 0).sum()
+                total_rows = self.df[total_col].notna().sum()
+                if total_rows > 0:
+                    total_checks += total_rows
+                    passed_checks += non_negative
+                    if non_negative < total_rows:
+                        integrity_issues.append({'type': 'negative_total', 'column': total_col, 'failed': int(total_rows - non_negative), 'severity': 'medium'})
+                    integrity_details.append({'check': 'non_negative_total', 'column': total_col, 'total': int(total_rows), 'passed': int(non_negative), 'score': round(non_negative / total_rows * 100, 2)})
+            except Exception:
+                pass
         
-        weights['completeness'] = completeness_weight
-        
-        # 2. UNIQUENESS WEIGHT - Based on duplicate prevalence
-        duplicate_rows = self.df.duplicated().sum()
-        duplicate_ratio = duplicate_rows / self.total_rows if self.total_rows > 0 else 0
-        
-        if duplicate_ratio > 0.20:
-            uniqueness_weight = 0.25
-            print(f"📊 Uniqueness: HIGH priority (duplicates: {duplicate_ratio*100:.1f}%) → weight: 0.25")
-        elif duplicate_ratio > 0.10:
-            uniqueness_weight = 0.20
-            print(f"📊 Uniqueness: MODERATE priority (duplicates: {duplicate_ratio*100:.1f}%) → weight: 0.20")
-        elif duplicate_ratio > 0.02:
-            uniqueness_weight = 0.15
-            print(f"📊 Uniqueness: STANDARD priority (duplicates: {duplicate_ratio*100:.1f}%) → weight: 0.15")
-        else:
-            uniqueness_weight = 0.10
-            print(f"📊 Uniqueness: LOW priority (duplicates: {duplicate_ratio*100:.1f}%) → weight: 0.10")
-        
-        weights['uniqueness'] = uniqueness_weight
-        
-        # 3. VALIDITY WEIGHT - Based on data type diversity and potential format issues
-        dtype_diversity = len(self.df.dtypes.value_counts())
-        string_cols = sum(1 for dt in self.df.dtypes if dt == 'object')
-        string_ratio = string_cols / len(self.df.columns) if len(self.df.columns) > 0 else 0
-        
-        if string_ratio > 0.6 or dtype_diversity > 5:
-            validity_weight = 0.22
-            print(f"📊 Validity: HIGH priority (string cols: {string_ratio*100:.1f}%, type diversity: {dtype_diversity}) → weight: 0.22")
-        elif string_ratio > 0.4 or dtype_diversity > 3:
-            validity_weight = 0.18
-            print(f"📊 Validity: MODERATE priority (string cols: {string_ratio*100:.1f}%, type diversity: {dtype_diversity}) → weight: 0.18")
-        else:
-            validity_weight = 0.14
-            print(f"📊 Validity: STANDARD priority (string cols: {string_ratio*100:.1f}%, type diversity: {dtype_diversity}) → weight: 0.14")
-        
-        weights['validity'] = validity_weight
-        
-        # 4. CONSISTENCY WEIGHT - Based on potential pattern variations
-        # Check for columns with mixed patterns (e.g., mixed case, inconsistent formats)
-        pattern_inconsistency_score = 0
-        for col in self.df.select_dtypes(include=['object']).columns[:10]:  # Sample first 10 string columns
-            if self.df[col].notna().sum() > 0:
-                unique_patterns = self.df[col].dropna().astype(str).str.len().nunique()
-                if unique_patterns > 5:
-                    pattern_inconsistency_score += 1
-        
-        if pattern_inconsistency_score > 5:
-            consistency_weight = 0.20
-            print(f"📊 Consistency: HIGH priority (pattern variations: {pattern_inconsistency_score}) → weight: 0.20")
-        elif pattern_inconsistency_score > 2:
-            consistency_weight = 0.16
-            print(f"📊 Consistency: MODERATE priority (pattern variations: {pattern_inconsistency_score}) → weight: 0.16")
-        else:
-            consistency_weight = 0.12
-            print(f"📊 Consistency: STANDARD priority (pattern variations: {pattern_inconsistency_score}) → weight: 0.12")
-        
-        weights['consistency'] = consistency_weight
-        
-        # 5. ACCURACY WEIGHT - Based on numeric data presence (outlier detection relevance)
-        numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-        numeric_ratio = len(numeric_cols) / len(self.df.columns) if len(self.df.columns) > 0 else 0
-        
-        if numeric_ratio > 0.5:
-            accuracy_weight = 0.22
-            print(f"📊 Accuracy: HIGH priority (numeric cols: {numeric_ratio*100:.1f}%) → weight: 0.22")
-        elif numeric_ratio > 0.3:
-            accuracy_weight = 0.18
-            print(f"📊 Accuracy: MODERATE priority (numeric cols: {numeric_ratio*100:.1f}%) → weight: 0.18")
-        else:
-            accuracy_weight = 0.12
-            print(f"📊 Accuracy: LOW priority (numeric cols: {numeric_ratio*100:.1f}%) → weight: 0.12")
-        
-        weights['accuracy'] = accuracy_weight
-        
-        # 6. TIMELINESS WEIGHT - Based on presence of date/time columns
-        date_cols = [col for col in self.df.columns if 'date' in col.lower() or 'time' in col.lower()]
-        for col in self.df.select_dtypes(include=['object']).columns:
-            if col not in date_cols:
+        # 2. DATE ORDERING CONSTRAINTS
+        for prefix1, prefix2 in [('created', 'updated'), ('start', 'end'), ('transaction', 'settlement')]:
+            col1_matches = [c for c in self.df.columns if prefix1 in c.lower() and ('date' in c.lower() or 'time' in c.lower())]
+            col2_matches = [c for c in self.df.columns if prefix2 in c.lower() and ('date' in c.lower() or 'time' in c.lower())]
+            if col1_matches and col2_matches:
+                col1, col2 = col1_matches[0], col2_matches[0]
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        pd.to_datetime(self.df[col].dropna().head(10), errors='raise', format='mixed')
-                    date_cols.append(col)
-                except:
+                        date1 = pd.to_datetime(self.df[col1], errors='coerce', format='mixed')
+                        date2 = pd.to_datetime(self.df[col2], errors='coerce', format='mixed')
+                    valid_pairs = ((date1 <= date2) | date1.isna() | date2.isna())
+                    valid_count = valid_pairs.sum()
+                    total_checks += len(self.df)
+                    passed_checks += valid_count
+                    if valid_count < len(self.df):
+                        integrity_issues.append({'type': 'date_order_violation', 'columns': [col1, col2], 'failed': int(len(self.df) - valid_count), 'severity': 'high'})
+                    integrity_details.append({'check': 'date_ordering', 'columns': [col1, col2], 'total': len(self.df), 'passed': int(valid_count), 'score': round(valid_count / len(self.df) * 100, 2)})
+                except Exception:
                     pass
         
+        # 3. ID FORMAT CONSISTENCY
+        for id_col in [c for c in self.df.columns if 'id' in c.lower() or 'reference' in c.lower()][:5]:
+            try:
+                col_data = self.df[id_col].dropna().astype(str)
+                if len(col_data) > 0:
+                    lengths = col_data.str.len()
+                    most_common = lengths.mode().iloc[0] if len(lengths.mode()) > 0 else lengths.median()
+                    consistent = (lengths == most_common).sum()
+                    total_checks += len(col_data)
+                    passed_checks += consistent
+                    integrity_details.append({'check': 'id_format_consistency', 'column': id_col, 'total': len(col_data), 'passed': int(consistent), 'score': round(consistent / len(col_data) * 100, 2)})
+            except Exception:
+                pass
+        
+        # 4. AMOUNT REASONABILITY (IQR)
+        for amount_col in [c for c in numeric_cols if any(kw in c.lower() for kw in ['amount', 'price', 'value'])][:3]:
+            try:
+                amount_data = self.df[amount_col].dropna()
+                if len(amount_data) > 10:
+                    Q1, Q3 = amount_data.quantile(0.25), amount_data.quantile(0.75)
+                    IQR = Q3 - Q1
+                    reasonable = ((amount_data >= Q1 - 3*IQR) & (amount_data <= Q3 + 3*IQR)).sum()
+                    total_checks += len(amount_data)
+                    passed_checks += reasonable
+                    integrity_details.append({'check': 'amount_reasonability', 'column': amount_col, 'total': len(amount_data), 'passed': int(reasonable), 'score': round(reasonable / len(amount_data) * 100, 2)})
+            except Exception:
+                pass
+        
+        if total_checks == 0:
+            score = 100.0
+            print(f"   📊 No integrity checks applicable → defaulting to 100")
+        else:
+            score = (passed_checks / total_checks * 100)
+            print(f"   📊 Formula: 100 × ({passed_checks}/{total_checks}) = {score:.2f}")
+        print(f"   ⚖️  Weight: Direct calculation")
+        print(f"   ✅ Checks: Cross-field, Date ordering, ID format, Amount reasonability")
+        
+        return {
+            'score': round(score, 2),
+            'total_checks': int(total_checks),
+            'passed_checks': int(passed_checks),
+            'failed_checks': int(total_checks - passed_checks),
+            'integrity_issues': integrity_issues,
+            'integrity_details': integrity_details,
+            'description': 'Cross-field relationships, referential constraints, and business rule validation'
+        }
+    
+    def calculate_dynamic_weights(self) -> Dict[str, Any]:
+        """
+        Calculate dynamic weights for each dimension based on EDA analysis AND operational context.
+        
+        Contextual Inference Strategy:
+        - Transactional Context (Settlement, Logs, Transactions): Higher Timeliness, Accuracy
+        - Master Context (Merchant List, KYC, Reference): Higher Validity, Completeness
+        - Analytical Context (Report, Quarterly, Insights): Higher Consistency, Uniqueness
+        
+        Returns dict with 'weights' (normalized to 1.0) and 'reasoning_log' (audit trail)
+        """
+        print("\n" + "🔍"*40)
+        print("⚖️  CALCULATING DYNAMIC WEIGHTS BASED ON EDA + CONTEXT")
+        print("🔍"*40)
+        
+        reasoning_log = []
+        column_schema = [col.lower() for col in self.df.columns]
+        column_schema_str = ", ".join(self.df.columns.tolist()[:20])  # First 20 columns for display
+        
+        # ==========================================
+        # STEP 1: CONTEXTUAL INFERENCE FROM COLUMN SCHEMA
+        # ==========================================
+        print("\n📋 STEP 1: Contextual Inference from Column Schema")
+        print(f"   Columns: {column_schema_str}{'...' if len(self.df.columns) > 20 else ''}")
+        
+        # Define context detection keywords
+        transactional_keywords = ['settlement', 'transaction', 'log', 'payment', 'transfer', 'debit', 'credit', 'batch', 'trace', 'auth']
+        master_keywords = ['merchant', 'kyc', 'reference', 'customer', 'vendor', 'supplier', 'account', 'profile', 'master', 'registry']
+        analytical_keywords = ['report', 'quarterly', 'insight', 'summary', 'aggregate', 'trend', 'analysis', 'metric', 'kpi', 'dashboard']
+        
+        # Count matches for each context
+        transactional_matches = [kw for kw in transactional_keywords if any(kw in col for col in column_schema)]
+        master_matches = [kw for kw in master_keywords if any(kw in col for col in column_schema)]
+        analytical_matches = [kw for kw in analytical_keywords if any(kw in col for col in column_schema)]
+        
+        transactional_score = len(transactional_matches)
+        master_score = len(master_matches)
+        analytical_score = len(analytical_matches)
+        
+        # Determine primary context
+        context_scores = {
+            'transactional': transactional_score,
+            'master': master_score,
+            'analytical': analytical_score
+        }
+        
+        inferred_context = max(context_scores, key=context_scores.get)
+        max_score = max(context_scores.values())
+        
+        # If no clear context, default to transactional (for financial data)
+        if max_score == 0:
+            inferred_context = 'transactional'
+            reasoning_log.append(f"No clear context keywords detected in columns. Defaulting to 'transactional' context for financial data safety.")
+        else:
+            reasoning_log.append(f"Context inferred: '{inferred_context.upper()}' (matched keywords: {context_scores[inferred_context]})")
+            if inferred_context == 'transactional':
+                reasoning_log.append(f"Transactional keywords detected: {transactional_matches}")
+            elif inferred_context == 'master':
+                reasoning_log.append(f"Master data keywords detected: {master_matches}")
+            else:
+                reasoning_log.append(f"Analytical keywords detected: {analytical_matches}")
+        
+        print(f"   🎯 Inferred Context: {inferred_context.upper()}")
+        print(f"   📊 Context Scores: Transactional={transactional_score}, Master={master_score}, Analytical={analytical_score}")
+        print(f"   🔍 Matched Keywords: {transactional_matches if inferred_context == 'transactional' else master_matches if inferred_context == 'master' else analytical_matches}")
+        
+        # ==========================================
+        # STEP 2: BASE WEIGHTS FROM EDA ANALYSIS
+        # ==========================================
+        print("\n📋 STEP 2: Base Weights from EDA Analysis")
+        
+        weights = {}
+        
+        # COMPLETENESS - Based on missingness
+        missing_ratio = self.df.isnull().sum().sum() / self.total_cells if self.total_cells > 0 else 0
+        if missing_ratio > 0.30:
+            completeness_weight = 0.20
+        elif missing_ratio > 0.15:
+            completeness_weight = 0.16
+        elif missing_ratio > 0.05:
+            completeness_weight = 0.12
+        else:
+            completeness_weight = 0.08
+        reasoning_log.append(f"Completeness base weight: {completeness_weight:.2f} (missing ratio: {missing_ratio*100:.1f}%)")
+        
+        # UNIQUENESS - Based on duplicates
+        duplicate_ratio = self.df.duplicated().sum() / self.total_rows if self.total_rows > 0 else 0
+        if duplicate_ratio > 0.20:
+            uniqueness_weight = 0.18
+        elif duplicate_ratio > 0.10:
+            uniqueness_weight = 0.14
+        elif duplicate_ratio > 0.02:
+            uniqueness_weight = 0.10
+        else:
+            uniqueness_weight = 0.08
+        reasoning_log.append(f"Uniqueness base weight: {uniqueness_weight:.2f} (duplicate ratio: {duplicate_ratio*100:.1f}%)")
+        
+        # VALIDITY - Based on string ratio
+        string_cols = sum(1 for dt in self.df.dtypes if dt == 'object')
+        string_ratio = string_cols / len(self.df.columns) if len(self.df.columns) > 0 else 0
+        if string_ratio > 0.6:
+            validity_weight = 0.18
+        elif string_ratio > 0.4:
+            validity_weight = 0.14
+        else:
+            validity_weight = 0.10
+        reasoning_log.append(f"Validity base weight: {validity_weight:.2f} (string columns: {string_ratio*100:.1f}%)")
+        
+        # CONSISTENCY - Based on pattern variations
+        pattern_score = 0
+        for col in self.df.select_dtypes(include=['object']).columns[:10]:
+            if self.df[col].notna().sum() > 0:
+                if self.df[col].dropna().astype(str).str.len().nunique() > 5:
+                    pattern_score += 1
+        if pattern_score > 5:
+            consistency_weight = 0.16
+        elif pattern_score > 2:
+            consistency_weight = 0.12
+        else:
+            consistency_weight = 0.08
+        reasoning_log.append(f"Consistency base weight: {consistency_weight:.2f} (pattern variations: {pattern_score})")
+        
+        # ACCURACY - Based on numeric columns
+        numeric_cols = self.df.select_dtypes(include=[np.number]).columns
+        numeric_ratio = len(numeric_cols) / len(self.df.columns) if len(self.df.columns) > 0 else 0
+        if numeric_ratio > 0.5:
+            accuracy_weight = 0.18
+        elif numeric_ratio > 0.3:
+            accuracy_weight = 0.14
+        else:
+            accuracy_weight = 0.10
+        reasoning_log.append(f"Accuracy base weight: {accuracy_weight:.2f} (numeric columns: {numeric_ratio*100:.1f}%)")
+        
+        # TIMELINESS - Based on date columns
+        date_cols = [col for col in self.df.columns if 'date' in col.lower() or 'time' in col.lower()]
         if len(date_cols) >= 3:
-            timeliness_weight = 0.20
-            print(f"📊 Timeliness: HIGH priority ({len(date_cols)} date columns) → weight: 0.20")
+            timeliness_weight = 0.16
         elif len(date_cols) >= 1:
-            timeliness_weight = 0.15
-            print(f"📊 Timeliness: MODERATE priority ({len(date_cols)} date columns) → weight: 0.15")
+            timeliness_weight = 0.12
         else:
             timeliness_weight = 0.08
-            print(f"📊 Timeliness: LOW priority ({len(date_cols)} date columns) → weight: 0.08")
+        reasoning_log.append(f"Timeliness base weight: {timeliness_weight:.2f} (date columns: {len(date_cols)})")
         
-        weights['timeliness'] = timeliness_weight
+        # INTEGRITY - Based on ID/reference columns
+        id_cols = [c for c in self.df.columns if 'id' in c.lower() or 'reference' in c.lower()]
+        amount_cols = [c for c in numeric_cols if any(kw in c.lower() for kw in ['amount', 'total', 'price'])]
+        if len(id_cols) >= 3 or len(amount_cols) >= 2:
+            integrity_weight = 0.14
+        elif len(id_cols) >= 1 or len(amount_cols) >= 1:
+            integrity_weight = 0.10
+        else:
+            integrity_weight = 0.08
+        reasoning_log.append(f"Integrity base weight: {integrity_weight:.2f} (ID cols: {len(id_cols)}, Amount cols: {len(amount_cols)})")
         
-        # NORMALIZE weights to sum to 1.0
+        # ==========================================
+        # STEP 3: APPLY CONTEXT-BASED MULTIPLIERS
+        # ==========================================
+        print("\n📋 STEP 3: Applying Context-Based Weight Adjustments")
+        
+        context_multiplier = 1.5  # Boost priority dimensions by 50%
+        
+        if inferred_context == 'transactional':
+            # Priority: Timeliness, Accuracy
+            timeliness_weight *= context_multiplier
+            accuracy_weight *= context_multiplier
+            reasoning_log.append(f"TRANSACTIONAL context: Boosted Timeliness ({timeliness_weight:.2f}) and Accuracy ({accuracy_weight:.2f}) by 50%")
+            print(f"   🚀 TRANSACTIONAL BOOST: Timeliness ×1.5, Accuracy ×1.5")
+            
+        elif inferred_context == 'master':
+            # Priority: Validity, Completeness
+            validity_weight *= context_multiplier
+            completeness_weight *= context_multiplier
+            reasoning_log.append(f"MASTER context: Boosted Validity ({validity_weight:.2f}) and Completeness ({completeness_weight:.2f}) by 50%")
+            print(f"   🚀 MASTER DATA BOOST: Validity ×1.5, Completeness ×1.5")
+            
+        elif inferred_context == 'analytical':
+            # Priority: Consistency, Uniqueness
+            consistency_weight *= context_multiplier
+            uniqueness_weight *= context_multiplier
+            reasoning_log.append(f"ANALYTICAL context: Boosted Consistency ({consistency_weight:.2f}) and Uniqueness ({uniqueness_weight:.2f}) by 50%")
+            print(f"   🚀 ANALYTICAL BOOST: Consistency ×1.5, Uniqueness ×1.5")
+        
+        # Assign weights
+        weights = {
+            'completeness': completeness_weight,
+            'uniqueness': uniqueness_weight,
+            'validity': validity_weight,
+            'consistency': consistency_weight,
+            'accuracy': accuracy_weight,
+            'timeliness': timeliness_weight,
+            'integrity': integrity_weight
+        }
+        
+        # ==========================================
+        # STEP 4: NORMALIZE TO SUM = 1.0
+        # ==========================================
         total_weight = sum(weights.values())
-        normalized_weights = {k: v / total_weight for k, v in weights.items()}
+        normalized_weights = {k: round(v / total_weight, 4) for k, v in weights.items()}
+        
+        reasoning_log.append(f"Normalized weights (sum=1.0): {normalized_weights}")
         
         print(f"\n🎯 Weight Normalization:")
         print(f"   Raw sum: {total_weight:.4f}")
@@ -738,7 +897,17 @@ class DataQualityAssessment:
             print(f"   - {dim.capitalize():15s}: {weight:.4f} ({weight*100:.2f}%)")
         print("🔍"*40 + "\n")
         
+        # Store reasoning log for API response
+        self.weight_reasoning_log = {
+            'inferred_context': inferred_context,
+            'context_scores': context_scores,
+            'matched_keywords': transactional_matches if inferred_context == 'transactional' else master_matches if inferred_context == 'master' else analytical_matches,
+            'reasoning_steps': reasoning_log,
+            'column_schema_sample': self.df.columns.tolist()[:20]
+        }
+        
         return normalized_weights
+
     
     def calculate_all_dimensions(self, custom_weights: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """Calculate all 6 data quality dimensions with real LLM insights."""
@@ -751,7 +920,8 @@ class DataQualityAssessment:
                 'validity': self.calculate_validity(),
                 'consistency': self.calculate_consistency(),
                 'accuracy': self.calculate_accuracy(),
-                'timeliness': self.calculate_timeliness()
+                'timeliness': self.calculate_timeliness(),
+                'integrity': self.calculate_integrity()
             }
         except Exception as e:
             return {
@@ -786,7 +956,8 @@ class DataQualityAssessment:
                 'validity': self.calculate_validity(),
                 'consistency': self.calculate_consistency(),
                 'accuracy': self.calculate_accuracy(),
-                'timeliness': self.calculate_timeliness()
+                'timeliness': self.calculate_timeliness(),
+                'integrity': self.calculate_integrity()
             }
         except Exception as e:
             return {
@@ -855,6 +1026,7 @@ class DataQualityAssessment:
             'llm_insights': llm_insights,
             'confidence_level': confidence_level,
             'weights_applied': weights,  # Store actual dynamic weights used
+            'reasoning_log': getattr(self, 'weight_reasoning_log', {}),  # Auditability requirement
             'quality_grade': self._get_quality_grade(overall_score),
             'validation_summary': validation_summary,  # NEW: Include all validation errors
             'summary': {
@@ -866,7 +1038,7 @@ class DataQualityAssessment:
                 'all_scores_normalized': True,
                 'no_simulation': True,
                 'llm_enabled': bool(self.api_key),
-                'weighting_strategy': 'dynamic_eda_based',
+                'weighting_strategy': 'context_aware_dynamic',
                 'timestamp': datetime.now().isoformat()
             }
         }
@@ -944,14 +1116,20 @@ class DataQualityAssessment:
                 'message': 'LLM API key not configured - cannot generate insights'
             }
         
-        # Prepare context for LLM with dynamic weights
+        # Prepare context for LLM with dynamic weights and field-level data
         weights_info = "\n".join([f"- {dim.capitalize()}: {weight*100:.2f}% (priority: {'HIGH' if weight > 0.2 else 'MEDIUM' if weight > 0.15 else 'STANDARD'})" 
                                    for dim, weight in weights.items()])
         
-        context = f"""
-You are a data quality expert analyzing a dataset with DYNAMIC WEIGHTING based on EDA.
+        missing_columns = self._format_missing_columns()
+        
+        context = f"""You are a data quality remediation specialist for banking/financial datasets.
 
-Data Quality Scores (0-100 scale):
+📊 DATASET METRICS:
+- Total Rows: {self.total_rows:,}
+- Total Columns: {self.total_cols}
+- Column Names: {', '.join(self.df.columns.tolist()[:15])}{'...' if self.total_cols > 15 else ''}
+
+📉 DIMENSION SCORES (0-100):
 - Completeness: {dimension_scores['completeness']:.2f}
 - Uniqueness: {dimension_scores['uniqueness']:.2f}
 - Validity: {dimension_scores['validity']:.2f}
@@ -959,18 +1137,52 @@ Data Quality Scores (0-100 scale):
 - Accuracy: {dimension_scores['accuracy']:.2f}
 - Timeliness: {dimension_scores['timeliness']:.2f}
 
-Dynamic Weights (based on EDA analysis):
+⚖️ DYNAMIC WEIGHTS (from EDA):
 {weights_info}
 
-Detected Issues:
+⚠️ MISSING DATA BY COLUMN:
+{missing_columns}
+
+🔴 DETECTED ISSUES:
 {self._format_issues_for_llm(issues)}
 
-Provide:
-1. Executive summary (2-3 sentences) - focus on dimensions with highest weights
-2. Root cause analysis (top 3 causes) - prioritize issues in high-weight dimensions
-3. Actionable recommendations (prioritized list) - address high-weight dimensions first
+📋 YOUR TASK:
+Generate FIELD-SPECIFIC recommendations. For each problematic field:
+1. Cite the EXACT field name from the dataset
+2. Explain WHY this field is failing (root cause)
+3. Explain the BUSINESS IMPACT (not technical jargon)
+4. Provide a SPECIFIC remediation action
 
-Be specific, data-driven, and actionable. Consider the dynamic weights when prioritizing recommendations.
+📤 OUTPUT FORMAT (STRICT JSON):
+{{
+  "summary": "2-3 sentence executive summary focusing on highest-weight dimensions",
+  "root_causes": [
+    {{
+      "field": "exact_field_name",
+      "cause": "Technical reason for failure",
+      "severity": "HIGH/MEDIUM/LOW"
+    }}
+  ],
+  "recommended_actions": [
+    {{
+      "field": "exact_field_name",
+      "why": "Root cause explanation",
+      "impact": "Business consequence if not fixed",
+      "action": "Specific remediation step",
+      "priority": "HIGH/MEDIUM/LOW"
+    }}
+  ]
+}}
+
+❌ FORBIDDEN:
+- Generic advice like "improve data quality" or "implement monitoring"
+- Recommendations not tied to specific field names
+- Technical jargon without business context
+
+✅ REQUIRED:
+- Every recommendation MUST cite a specific field from the column list above
+- Impact statements MUST explain business/regulatory consequences
+- Actions MUST be implementable by a data engineering team
 """
         
         try:
@@ -989,6 +1201,21 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
                 'message': 'LLM API call failed'
             }
     
+    def _format_missing_columns(self) -> str:
+        """Format per-column missing data for LLM context."""
+        missing_info = []
+        for col in self.df.columns:
+            missing_pct = self.df[col].isnull().mean() * 100
+            if missing_pct >= 50:
+                missing_info.append(f"- {col}: {missing_pct:.1f}% missing (CRITICAL)")
+            elif missing_pct > 0:
+                missing_info.append(f"- {col}: {missing_pct:.1f}% missing")
+        
+        if not missing_info:
+            return "No significant missing data detected."
+        
+        return "\n".join(missing_info[:25])  # Limit to 25 columns
+    
     def _format_issues_for_llm(self, issues: List[Dict]) -> str:
         """Format issues for LLM context."""
         if not issues:
@@ -1000,8 +1227,9 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
         
         return "\n".join(formatted)
     
-    def _call_llm_api(self, context: str) -> str:
-        """Make real LLM API call - NO MOCKING."""
+    def _call_llm_api(self, context: str, max_retries: int = 3) -> str:
+        """Make LLM API call with exponential backoff retry."""
+        import time
         
         headers = {
             'Authorization': f'Bearer {self.api_key}',
@@ -1013,27 +1241,89 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
             'messages': [
                 {
                     'role': 'system',
-                    'content': 'You are a data quality expert providing actionable insights.'
+                    'content': 'You are a data quality remediation specialist. Return ONLY valid JSON, no markdown code fences.'
                 },
                 {
                     'role': 'user',
                     'content': context
                 }
             ],
-            'temperature': 0.3,  # Lower temperature for more deterministic output
-            'max_tokens': 800
+            'temperature': 0.3,
+            'max_tokens': 2000
         }
         
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(self.api_base, json=payload, headers=headers)
-            response.raise_for_status()
-            
-            result = response.json()
-            return result['choices'][0]['message']['content']
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                with httpx.Client(timeout=45.0) as client:
+                    response = client.post(self.api_base, json=payload, headers=headers)
+                    response.raise_for_status()
+                    result = response.json()
+                    return result['choices'][0]['message']['content']
+                    
+            except httpx.TimeoutException as e:
+                last_error = e
+                wait_time = 2 ** attempt
+                print(f"⏱️ LLM timeout on attempt {attempt + 1}/{max_retries}, retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code == 429:  # Rate limited
+                    wait_time = 2 ** (attempt + 1)
+                    print(f"⚠️ Rate limited, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                elif e.response.status_code >= 500:  # Server error
+                    wait_time = 2 ** attempt
+                    print(f"⚠️ Server error {e.response.status_code}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise  # Don't retry client errors (4xx except 429)
+                    
+            except Exception as e:
+                last_error = e
+                print(f"⚠️ LLM error on attempt {attempt + 1}: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+        
+        # All retries exhausted - raise exception
+        raise RuntimeError(f"LLM call failed after {max_retries} retries: {last_error}")
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """Parse LLM response into structured format."""
+        """Parse LLM JSON response with text fallback."""
+        import json as json_module
         
+        # Try to extract JSON from response
+        try:
+            # Look for JSON block in markdown code fence
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+            if json_match:
+                parsed = json_module.loads(json_match.group(1))
+                return self._normalize_parsed_response(parsed)
+            
+            # Try to find raw JSON object
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                parsed = json_module.loads(json_match.group())
+                return self._normalize_parsed_response(parsed)
+        except json_module.JSONDecodeError as e:
+            print(f"⚠️ JSON parse failed: {e}")
+        
+        # Fallback: text-based parsing
+        print("⚠️ Using text fallback for LLM response parsing")
+        return self._parse_llm_response_text(response)
+    
+    def _normalize_parsed_response(self, parsed: Dict) -> Dict[str, Any]:
+        """Normalize parsed JSON to expected format."""
+        return {
+            'summary': parsed.get('summary', 'Analysis complete.'),
+            'root_causes': parsed.get('root_causes', []),
+            'recommended_actions': parsed.get('recommended_actions', [])
+        }
+    
+    def _parse_llm_response_text(self, response: str) -> Dict[str, Any]:
+        """Fallback text-based parsing for non-JSON responses."""
         lines = response.strip().split('\n')
         
         summary = []
@@ -1047,7 +1337,6 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
             if not line:
                 continue
             
-            # Detect sections
             if 'summary' in line.lower() or 'executive' in line.lower():
                 current_section = 'summary'
                 continue
@@ -1058,7 +1347,6 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
                 current_section = 'recommendations'
                 continue
             
-            # Add content to appropriate section
             if current_section == 'summary':
                 if not line.startswith(('1.', '2.', '3.', '-', '*')):
                     summary.append(line)
@@ -1071,8 +1359,8 @@ Be specific, data-driven, and actionable. Consider the dynamic weights when prio
         
         return {
             'summary': ' '.join(summary) if summary else response[:200],
-            'root_causes': root_causes[:5] if root_causes else ['Analysis pending'],
-            'recommendations': recommendations[:5] if recommendations else ['Review data quality metrics']
+            'root_causes': root_causes[:5] if root_causes else [],
+            'recommended_actions': []  # No structured recommendations from text
         }
     
     def _get_quality_grade(self, score: float) -> str:
