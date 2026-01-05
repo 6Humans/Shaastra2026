@@ -173,6 +173,44 @@ export function AIAnalysisSummary({ analysis }: AIAnalysisSummaryProps) {
                                             </ul>
                                         </div>
                                     )}
+
+                                    {/* Detailed Predictions */}
+                                    {record.predictions.predictions && record.predictions.predictions.length > 0 && (
+                                        <div className="mt-3 pt-3 border-t border-border/50">
+                                            <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                                                <span className="text-amber-400">⚠</span> Predicted Issues:
+                                            </p>
+                                            <div className="space-y-2">
+                                                {record.predictions.predictions.slice(0, 3).map((pred, i) => (
+                                                    <div key={i} className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-2">
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <span className="text-xs text-amber-100/90 flex-1">{pred.issue}</span>
+                                                            <div className="flex items-center gap-1 flex-shrink-0">
+                                                                <Badge
+                                                                    variant={pred.severity === "HIGH" ? "destructive" : pred.severity === "MEDIUM" ? "warning" : "info"}
+                                                                    className="text-[9px] px-1 py-0"
+                                                                >
+                                                                    {pred.severity}
+                                                                </Badge>
+                                                                <span className="text-[10px] text-muted-foreground">
+                                                                    {(pred.probability * 100).toFixed(0)}%
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        {pred.affected_fields && pred.affected_fields.length > 0 && (
+                                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                                {pred.affected_fields.slice(0, 3).map((field, j) => (
+                                                                    <code key={j} className="text-[9px] bg-background/50 px-1 py-0.5 rounded text-purple-300">
+                                                                        {field}
+                                                                    </code>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

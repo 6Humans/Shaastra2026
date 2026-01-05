@@ -118,40 +118,77 @@ class Agent(ABC):
 - Assess if this record is typical or anomalous for this dataset
 - Consider the prioritized dimensions (higher weights) in your analysis
 """
+        # Log the EDA context being sent to agents
+        print(f"\n📋 [{self.name}] EDA Context being sent to LLM:")
+        print(f"   📊 Dataset: {summary.get('total_rows', 0):,} rows × {summary.get('total_columns', 0)} cols")
+        print(f"   🎯 Overall Score: {dq.get('overall_score', 'N/A'):.2f}/100 ({dq.get('quality_grade', 'N/A')})")
+        print(f"   ⚠️  Issues Detected: {len(issues)}")
+        print(f"   📐 Context Length: {len(context)} chars")
+        
         return context
 
-    async def call_llm(self, prompt: str, system_prompt: str = None) -> str:
-        """Call OpenRouter LLM (Qwen model)."""
+    async def call_llm(self, prompt: str, system_prompt: str = None, max_retries: int = 3) -> str:
+        """Call OpenRouter LLM with exponential backoff retry."""
         if not self.openrouter_api_key:
             return "LLM not configured"
         
-        try:
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.openrouter_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "qwen/qwen3-235b-a22b-2507",
-                        "messages": messages,
-                        "temperature": 0.7,
-                        "max_tokens": 4000
-                    },
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
-        except Exception as e:
-            self.log(f"LLM error: {str(e)}")
-            return f"Error: {str(e)}"
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.openrouter_api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": "qwen/qwen3-235b-a22b-2507",
+                            "messages": messages,
+                            "temperature": 0.7,
+                            "max_tokens": 4000
+                        },
+                        timeout=45.0  # Increased timeout
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    return result["choices"][0]["message"]["content"]
+                    
+            except httpx.TimeoutException as e:
+                last_error = e
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                self.log(f"Timeout on attempt {attempt + 1}/{max_retries}, retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+                
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                if e.response.status_code == 429:  # Rate limited
+                    wait_time = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    self.log(f"Rate limited, retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                elif e.response.status_code >= 500:  # Server error
+                    wait_time = 2 ** attempt
+                    self.log(f"Server error {e.response.status_code}, retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.log(f"HTTP error: {e.response.status_code}")
+                    raise  # Don't retry client errors (4xx except 429)
+                    
+            except Exception as e:
+                last_error = e
+                self.log(f"LLM error on attempt {attempt + 1}: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+        
+        # All retries exhausted
+        self.log(f"All {max_retries} LLM attempts failed: {last_error}")
+        raise RuntimeError(f"LLM call failed after {max_retries} retries: {last_error}")
 
     def _repair_json(self, json_str: str) -> str:
         """Attempt to repair invalid JSON strings."""
@@ -447,12 +484,14 @@ Apply rigorous standards but be fair and consistent."""
                 
                 llm_scores = self._extract_json(llm_response)
                 if not llm_scores:
-                    self.log(f"Using default scores due to parsing failure")
+                    raise ValueError(f"LLM failed to return valid JSON for record {record.record_id}")
+            else:
+                raise ValueError("OpenRouter API key not configured - cannot score without LLM")
             
-            # Extract LLM scores or use defaults
-            validity = llm_scores.get('validity_score', 0.9)
-            consistency = llm_scores.get('consistency_score', 0.95)
-            accuracy = llm_scores.get('accuracy_score', 0.85)
+            # Extract LLM scores (NO FALLBACKS - must have real data)
+            validity = llm_scores['validity_score']
+            consistency = llm_scores['consistency_score']
+            accuracy = llm_scores['accuracy_score']
             
             # Calculate weighted overall score (dynamic weights based on field presence)
             weights = {
@@ -510,131 +549,99 @@ class InsightAgent(Agent):
                 eda_info = self._format_eda_context()
                 prompt = f"""{eda_info}
 
-📝 INDIVIDUAL RECORD INSIGHT GENERATION:
-
-💡 INSIGHT GENERATION - RECORD {record.record_id}
+📝 DATA-DRIVEN RECOMMENDATION GENERATION - RECORD {record.record_id}
 
 📊 RECORD DATA:
 {json.dumps(record.data, indent=2)}
 
-📋 YOUR TASK AS AN INSIGHT ANALYST:
-Transform quality scores into strategic, actionable business insights.
+📋 STRICT INSTRUCTIONS FOR RECOMMENDATIONS:
 
-🎯 ANALYSIS FRAMEWORK:
+You MUST derive ALL recommendations STRICTLY from the eda_info data gaps above.
+DO NOT generate generic recommendations. Every recommendation MUST be traceable to a specific data issue.
 
-1. **KEY INSIGHTS** (3-5 insights):
-   - What does this data tell us about transaction quality?
-   - Are there patterns indicating systemic issues?
-   - What's the business impact of detected issues?
-   - Which fields are most critical for business operations?
-   - Are there compliance or regulatory concerns?
-   
-   Format: ["Specific, measurable insight with business context"]
+🎯 REQUIRED ANALYSIS STEPS:
 
-2. **RISK ASSESSMENT** (Priority-ranked):
-   
-   🔴 **CRITICAL RISKS** (Immediate action required):
-   - Data integrity issues affecting financial accuracy
-   - Compliance violations (PCI-DSS, GDPR)
-   - Security concerns (exposed sensitive data)
-   
-   🟡 **MODERATE RISKS** (Address within 1 week):
-   - Data quality degradation trends
-   - Process efficiency concerns
-   - Customer experience impacts
-   
-   🟢 **LOW RISKS** (Monitor and improve):
-   - Minor formatting inconsistencies
-   - Optimization opportunities
-   - Best practice deviations
-   
-   Format per risk:
-   {{
-     "severity": "CRITICAL/MODERATE/LOW",
-     "risk": "Specific risk description",
-     "probability": "HIGH/MEDIUM/LOW",
-     "impact": "Business impact if not addressed",
-     "affected_fields": ["field1", "field2"]
-   }}
+## STEP 1: EXTRACT DATA GAPS
+Identify fields from eda_info that are:
+- Listed under "Critical Missing Data (100% missing)"
+- Listed under "Significant Missing Data"
+- Have low quality scores in any dimension
 
-3. **ACTIONABLE RECOMMENDATIONS** (Prioritized):
-   
-   Each recommendation must include:
-   - **Action**: What to do (specific, not vague)
-   - **Why**: Business justification
-   - **How**: Implementation approach
-   - **Effort**: LOW/MEDIUM/HIGH
-   - **Impact**: Expected quality improvement (%)
-   - **Timeline**: Immediate/Short-term/Long-term
-   
-   Example:
-   {{
-     "priority": 1,
-     "action": "Implement real-time Luhn validation for card numbers",
-     "justification": "23% of records fail card validation, risking payment processing errors",
-     "implementation": "Add pre-submission validation in payment form with instant feedback",
-     "effort": "LOW",
-     "expected_improvement": "95% reduction in invalid card entries",
-     "timeline": "Immediate",
-     "estimated_cost_savings": "$50K annually in failed transaction fees"
-   }}
+## STEP 2: TRANSLATE TO BUSINESS IMPACT
+For each missing/low-quality field, explain the SPECIFIC business impact:
 
-4. **TREND INDICATORS**:
-   - Is quality improving or degrading?
-   - Are issues isolated or systemic?
-   - What's the data maturity level?
+| Field | Business Impact Examples |
+|-------|-------------------------|
+| billing_amount | Financial reconciliation cannot be performed |
+| fraud_score | Transaction security/risk monitoring disabled |
+| 3ds_authentication | Chargeback liability risk increased |
+| customer_email | Customer communication impossible |
+| transaction_id | Audit trail broken, compliance risk |
+| merchant_id | Settlement routing failure |
+| card_expiry | Recurring payment validation blocked |
+| settlement_date | Cash flow forecasting impossible |
+| gateway_response | Payment failure root cause unknown |
+
+## STEP 3: MAP TO ACTIONABLE STEPS
+Each recommendation MUST follow this format:
+[Field Name] | [Understandable Impact] | [Direct Actionable Step]
 
 📤 OUTPUT FORMAT (STRICT JSON):
 {{
-  "executive_summary": "One-sentence overview of record quality",
+  "executive_summary": "One-sentence overview based on detected data gaps",
   "insights": [
-    "Insight 1 with specific metrics",
-    "Insight 2 with business context",
-    "Insight 3 with actionable focus"
+    "Insight derived from specific field/dimension issue",
+    "Insight with quantified impact from eda_info scores"
   ],
   "risks": [
     {{
       "severity": "CRITICAL/MODERATE/LOW",
-      "risk": "Description",
-      "probability": "HIGH/MEDIUM/LOW",
-      "impact": "Business impact",
-      "affected_fields": ["field1"]
+      "field": "affected_field_name",
+      "risk": "Specific risk based on data gap",
+      "impact": "Business impact statement",
+      "regulatory_concern": "PCI-DSS/GDPR/RBI if applicable"
     }}
   ],
-  "recommendations": [
+  "recommended_actions": [
     {{
-      "priority": 1,
-      "action": "Specific action",
-      "justification": "Why it matters",
-      "implementation": "How to do it",
-      "effort": "LOW/MEDIUM/HIGH",
-      "expected_improvement": "Quantified benefit",
-      "timeline": "When to implement"
+      "field": "exact_field_name_from_eda",
+      "impact": "Clear business impact statement",
+      "action": "Specific remediation step",
+      "priority": "HIGH/MEDIUM/LOW",
+      "effort": "LOW/MEDIUM/HIGH"
     }}
   ],
-  "trend_indicator": "IMPROVING/STABLE/DEGRADING",
-  "data_maturity_score": 1-5,
-  "confidence_level": "HIGH/MEDIUM/LOW"
+  "data_gaps_summary": {{
+    "critical_missing_count": 0,
+    "significant_missing_count": 0,
+    "fields_needing_attention": ["field1", "field2"]
+  }}
 }}
 
-Be specific, quantitative, and business-focused. Avoid generic advice."""
+❌ FORBIDDEN:
+- Generic advice like "improve data quality"
+- Recommendations not tied to specific field issues
+- Vague impact statements without business context
+
+✅ REQUIRED:
+- Every recommendation traces to a specific field in eda_info
+- Impact statements explain business/regulatory consequence
+- Actions are implementable by a data engineering team"""
 
                 llm_response = await self.call_llm(
                     prompt,
-                    system_prompt="""You are a senior data quality analyst and business intelligence expert with:
-- 15+ years experience in financial services data governance
-- Deep expertise in DAMA DMBOK, ISO 8000, and data quality frameworks
-- Strong business acumen connecting data quality to ROI
-- Track record of implementing enterprise data quality programs
+                    system_prompt="""You are a data remediation specialist. Your ONLY job is to:
+1. Extract specific data gaps from the provided eda_info
+2. Translate them into business impacts
+3. Provide field-specific remediation actions
 
-Your insights must be:
-- Specific and evidence-based (cite actual field names and values)
-- Actionable with clear implementation paths
-- Quantified with metrics and expected outcomes
-- Business-focused (revenue, cost, risk, compliance)
-- Formatted as valid, parseable JSON
+RULES:
+- NEVER give generic advice
+- ALWAYS cite the specific field name
+- ALWAYS explain the business consequence
+- Format: [Field] | [Impact] | [Action]
 
-Think like a consultant presenting to C-level executives: strategic, impactful, ROI-focused."""
+You are presenting to a Chief Data Officer who wants specific, actionable items."""
                 )
 
                 
@@ -643,11 +650,11 @@ Think like a consultant presenting to C-level executives: strategic, impactful, 
                 if parsed:
                     insights = parsed.get("insights", [])
                     risks = parsed.get("risks", [])
-                    recommendations = parsed.get("recommendations", [])
+                    recommendations = parsed.get("recommended_actions", [])
                 else:
-                    insights = ["Data quality analysis completed (parsing failed)"]
-                    risks = ["Unable to parse detailed analysis"]
-                    recommendations = ["Review data manually"]
+                    raise ValueError(f"LLM failed to return valid JSON for record {record.record_id}")
+            else:
+                raise ValueError("OpenRouter API key not configured - cannot generate insights without LLM")
 
             output = {
                 "record_id": record.record_id,
@@ -828,14 +835,9 @@ Avoid vague predictions. Be specific about what will happen, when, and why."""
                     confidence = parsed.get("model_confidence", 0.75)
                     quality_forecast = parsed.get("quality_score_forecast", {})
                 else:
-                    self.log(f"Failed to parse LLM prediction response")
-                    predictions = [{
-                        "issue": "Prediction parsing failed",
-                        "probability": 0.0,
-                        "timeframe_days": 7,
-                        "severity": "LOW"
-                    }]
-                    quality_forecast = {"predicted_7d": 0.88}
+                    raise ValueError(f"LLM failed to return valid JSON for record {record.record_id}")
+            else:
+                raise ValueError("OpenRouter API key not configured - cannot predict without LLM")
 
             output = {
                 "record_id": record.record_id,

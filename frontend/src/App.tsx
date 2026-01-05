@@ -163,15 +163,18 @@ function App() {
 
             <HighRiskColumns columns={data.anomaly_report.high_risk_columns} />
 
-            <div className="grid lg:grid-cols-2 gap-6">
+
+            <div className={`grid gap-6 ${data.anomaly_report.type_validation_errors.total_errors > 0 ? 'lg:grid-cols-2' : 'lg:grid-cols-1'}`}>
               <OutlierTable
                 outliers={data.anomaly_report.ml_detected_outliers.by_column}
                 totalOutliers={data.anomaly_report.ml_detected_outliers.total_outliers}
               />
-              <ValidationErrors
-                errors={data.anomaly_report.type_validation_errors.errors}
-                totalErrors={data.anomaly_report.type_validation_errors.total_errors}
-              />
+              {data.anomaly_report.type_validation_errors.total_errors > 0 && (
+                <ValidationErrors
+                  errors={data.anomaly_report.type_validation_errors.errors}
+                  totalErrors={data.anomaly_report.type_validation_errors.total_errors}
+                />
+              )}
             </div>
           </div>
         )
