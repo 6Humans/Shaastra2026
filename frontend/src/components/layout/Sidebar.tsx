@@ -64,19 +64,6 @@ export function Sidebar({ activeSection, onSectionChange, hasData }: SidebarProp
                     )
                 })}
             </nav>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-border">
-                <a
-                    href="https://github.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                    <Github className="w-4 h-4" />
-                    View on GitHub
-                </a>
-            </div>
         </aside>
     )
 }
