@@ -132,9 +132,17 @@ class Agent(ABC):
         if not self.openrouter_api_key:
             return "LLM not configured"
         
+        # Enforce English-only responses to prevent Chinese characters from Qwen
+        english_enforcement = "CRITICAL: You MUST respond ONLY in English. Do NOT use any Chinese characters, Chinese text, or any non-English characters whatsoever. All output must be in pure English ASCII characters only."
+        
         messages = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            # Prepend English enforcement to the system prompt
+            enhanced_system_prompt = f"{english_enforcement}\n\n{system_prompt}"
+            messages.append({"role": "system", "content": enhanced_system_prompt})
+        else:
+            # Add English enforcement as standalone system prompt
+            messages.append({"role": "system", "content": english_enforcement})
         messages.append({"role": "user", "content": prompt})
         
         last_error = None

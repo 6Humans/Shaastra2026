@@ -389,6 +389,7 @@ Analyzed **{eda_results['shape']['rows']:,} transactions** across **{eda_results
 | **Consistency** | {dq['scores']['consistency']:.2f} | {_score_to_grade(dq['scores']['consistency'])} | {dq['dimensions']['consistency']['description']} |
 | **Accuracy** | {dq['scores']['accuracy']:.2f} | {_score_to_grade(dq['scores']['accuracy'])} | {dq['dimensions']['accuracy']['description']} |
 | **Timeliness** | {dq['scores']['timeliness']:.2f} | {_score_to_grade(dq['scores']['timeliness'])} | {dq['dimensions']['timeliness']['description']} |
+| **Integrity** | {dq['scores']['integrity']:.2f} | {_score_to_grade(dq['scores']['integrity'])} | {dq['dimensions']['integrity']['description']} |
 
 ---
 

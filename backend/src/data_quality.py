@@ -1241,7 +1241,7 @@ Generate FIELD-SPECIFIC recommendations. For each problematic field:
             'messages': [
                 {
                     'role': 'system',
-                    'content': 'You are a data quality remediation specialist. Return ONLY valid JSON, no markdown code fences.'
+                    'content': 'CRITICAL: You MUST respond ONLY in English. Do NOT use any Chinese characters, Chinese text, or any non-English characters whatsoever. All output must be in pure English ASCII characters only.\n\nYou are a data quality remediation specialist. Return ONLY valid JSON, no markdown code fences.'
                 },
                 {
                     'role': 'user',
