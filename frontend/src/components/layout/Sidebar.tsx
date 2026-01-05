@@ -34,7 +34,7 @@ export function Sidebar({ activeSection, onSectionChange, hasData }: SidebarProp
                     <Database className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                    <h1 className="font-bold text-lg gradient-text">DataQuality</h1>
+                    <h1 className="font-bold text-lg gradient-text">DataSentinel</h1>
                     <p className="text-xs text-muted-foreground">AI Analysis</p>
                 </div>
             </div>
